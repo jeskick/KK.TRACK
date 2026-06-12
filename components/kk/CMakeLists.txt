@@ -3,6 +3,7 @@ idf_component_register(
         "src/time.c"
         "src/led.c"
         "src/repair.c"
+        "src/gesture_cfg.c"
         "src/imu_mount.c"
         "src/storage.c"
         "src/rx_profile.c"

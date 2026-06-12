@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "kk/gesture_cfg.h"
 #include "kk/imu_mount.h"
 
 #define KK_RX_CH_MIN         5
@@ -40,6 +41,8 @@ typedef struct {
     uint8_t mount_horiz;
     uint8_t mount_lr;
     uint8_t mount_fb;
+    uint8_t gest_roll_deg;
+    uint16_t gest_swing_ms;
 } kk_rx_profile_t;
 
 kk_rx_profile_t kk_rx_profile_defaults(void);
@@ -57,3 +60,4 @@ void kk_rx_profile_save(const kk_rx_profile_t *cfg);
 void kk_rx_profile_reset(kk_rx_profile_t *out);
 void kk_rx_profile_mount_to_imu(const kk_rx_profile_t *p, kk_imu_mount_t *out);
 void kk_rx_profile_mount_from_imu(kk_rx_profile_t *p, const kk_imu_mount_t *m);
+void kk_rx_profile_gesture_to_cfg(const kk_rx_profile_t *p, kk_gesture_cfg_t *out);

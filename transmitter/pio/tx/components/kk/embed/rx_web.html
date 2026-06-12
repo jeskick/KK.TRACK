@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>KK-TRACK RX</title>
+<title>KK-TRACK CONFIG.RX</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,-apple-system,sans-serif;background:#0f1419;color:#e7ecf3;line-height:1.4;padding:10px;max-width:480px;margin:0 auto;font-size:14px}
@@ -14,12 +14,16 @@ h2{font-size:.88rem;margin:0 0 8px;color:#9aa7b8;font-weight:600}
 .item label{display:block;font-size:.7rem;color:#8b98a8}
 .item .val{font-size:.95rem;font-weight:600}
 .line{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px}
-.line>label{color:#b8c5d6;white-space:nowrap}
-.in40{width:40px;min-width:40px;padding:4px 2px;border:1px solid #2d3a4d;border-radius:6px;background:#121a24;color:#fff;font-size:14px;text-align:center}
+.line>label{color:#b8c5d6;white-space:nowrap;font-size:.82rem}
+.slider-row{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+.slider-lbl{flex:0 0 78px;color:#b8c5d6;font-size:.78rem;line-height:1.2;white-space:nowrap}
+.slider-row input[type=range]{flex:1;min-width:0;margin:0;height:24px}
+.in-num{width:52px;min-width:52px;flex-shrink:0;padding:5px 4px;border:1px solid #2d3a4d;border-radius:6px;background:#121a24;color:#fff;font-size:13px;text-align:center;-moz-appearance:textfield}
+.in-num::-webkit-outer-spin-button,.in-num::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .sel{width:52px;padding:4px;border:1px solid #2d3a4d;border-radius:6px;background:#121a24;color:#fff;font-size:14px}
 .sel-yaw{width:62px}
-input[type=range]{width:100%;margin:4px 0 2px;height:22px}
-.hint{font-size:.68rem;color:#6d7a8a;margin:-2px 0 6px}
+.tag{color:#6d7a8a;font-size:.7rem;white-space:nowrap;flex-shrink:0}
+.hint{font-size:.68rem;color:#6d7a8a;margin:-2px 0 8px;line-height:1.35}
 .btns{display:flex;gap:8px;margin-top:6px}
 .btn{flex:1;padding:10px;border:0;border-radius:8px;font-size:.9rem;color:#fff}
 .btn-reset{background:#3d4a5c}
@@ -27,12 +31,16 @@ input[type=range]{width:100%;margin:4px 0 2px;height:22px}
 .msg{flex:2;font-size:.75rem;color:#7dffb2;line-height:2.2;text-align:right}
 .chk{display:flex;align-items:center;gap:4px;color:#b8c5d6;font-size:.85rem}
 .chk input{width:16px;height:16px}
+.gest-row{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+.gest-angle{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.gest-angle>label{color:#b8c5d6;font-size:.78rem;white-space:nowrap}
+.gest-ms{flex:1;min-width:0;margin-bottom:0!important}
+.gest-ms .slider-lbl{flex:0 0 48px}
 </style>
 </head>
 <body>
-<h1>KK-TRACK 接收机</h1>
+<h1>KK-TRACK CONFIG.RX</h1>
 <div class="card">
-<h2>信息</h2>
 <div class="grid2">
 <div class="item"><label>左右 µs</label><div class="val" id="plr">--</div></div>
 <div class="item"><label>上下 µs</label><div class="val" id="pud">--</div></div>
@@ -57,24 +65,39 @@ input[type=range]{width:100%;margin:4px 0 2px;height:22px}
 <label class="chk"><input type="checkbox" id="rev_ud">PITCH-REV</label>
 </div>
 <p class="hint">YAW：180°=1000–2000µs；270°=500–2500µs，中位均为1500。偏移仍可用于个体微调。</p>
-<div class="line">
-<label>左右偏移µs</label><input class="in40" type="number" name="offset_lr" id="off_lr" min="-400" max="400">
-</div>
+<div class="slider-row">
+<label class="slider-lbl">左右偏移µs</label>
 <input type="range" id="off_lr_s" min="-400" max="400" step="1">
-<div class="line">
-<label>上下偏移µs</label><input class="in40" type="number" name="offset_ud" id="off_ud" min="-400" max="400">
+<input class="in-num" type="number" name="offset_lr" id="off_lr" min="-400" max="400">
 </div>
+<div class="slider-row">
+<label class="slider-lbl">上下偏移µs</label>
 <input type="range" id="off_ud_s" min="-400" max="400" step="1">
-<div class="line">
-<label>左右比例</label><input class="in40" type="number" name="scale_lr" id="scale" min="1" max="100">
-<span style="color:#6d7a8a;font-size:.72rem">50=100%</span>
+<input class="in-num" type="number" name="offset_ud" id="off_ud" min="-400" max="400">
 </div>
+<div class="slider-row">
+<label class="slider-lbl">左右比例</label>
 <input type="range" id="scale_s" min="1" max="100" step="1">
-<p class="hint">每+10 放大1倍（60→2×，70→3×），仅YAW通道</p>
-<div class="line">
-<label>抖动°</label><input class="in40" type="number" name="jitter_x10" id="jit" min="0" max="200">
+<input class="in-num" type="number" name="scale_lr" id="scale" min="1" max="100">
+<span class="tag">50=100%</span>
 </div>
+<p class="hint">每+10 放大1倍（60→2×，70→3×），仅YAW通道</p>
+<div class="slider-row">
+<label class="slider-lbl">抖动°</label>
 <input type="range" id="jit_s" min="0" max="200" step="1">
+<input class="in-num" type="number" name="jitter_x10" id="jit" min="0" max="200">
+</div>
+<div class="gest-row">
+<div class="gest-angle">
+<label>回中°</label><select class="sel sel-yaw" id="gest_roll"></select>
+</div>
+<div class="slider-row gest-ms">
+<label class="slider-lbl">超时ms</label>
+<input type="range" id="gest_ms_s" min="500" max="2000" step="100">
+<input class="in-num" type="number" id="gest_ms" min="500" max="2000" step="100">
+</div>
+</div>
+<p class="hint">TX 左右各摆到设定角度后回正稳定即自动回中；超时内未完成左右摆动则取消。保存后同步到 TX。</p>
 <div class="btns">
 <button type="button" class="btn btn-reset" id="btnReset">重置参数</button>
 </div>
@@ -110,6 +133,15 @@ function fillRot(sel,val){
     sel.appendChild(o);
   });
 }
+function fillGestRoll(sel,val){
+  sel.innerHTML='';
+  [20,30,40].forEach(d=>{
+    const o=document.createElement('option');
+    o.value=d;o.textContent=d+'°';
+    o.selected=(d==val);
+    sel.appendChild(o);
+  });
+}
 function bindPair(s,n){
   const pull=()=>{n.value=s.value;};
   s.oninput=()=>{pull();scheduleSave();};
@@ -130,10 +162,8 @@ function loadCfg(d){
   fillRot($('mount_horiz'),d.mount_horiz||0);
   fillRot($('mount_lr'),d.mount_lr||0);
   fillRot($('mount_fb'),d.mount_fb||0);
-  bindPair($('off_lr_s'),$('off_lr'));
-  bindPair($('off_ud_s'),$('off_ud'));
-  bindPair($('scale_s'),$('scale'));
-  bindPair($('jit_s'),$('jit'));
+  fillGestRoll($('gest_roll'),d.gest_roll_deg||20);
+  $('gest_ms').value=d.gest_swing_ms||1500;$('gest_ms_s').value=d.gest_swing_ms||1500;
   loading=false;
 }
 function fixCh(){
@@ -149,6 +179,12 @@ $('rev_ud').onchange=scheduleSave;
 $('mount_horiz').onchange=scheduleSave;
 $('mount_lr').onchange=scheduleSave;
 $('mount_fb').onchange=scheduleSave;
+$('gest_roll').onchange=scheduleSave;
+bindPair($('off_lr_s'),$('off_lr'));
+bindPair($('off_ud_s'),$('off_ud'));
+bindPair($('scale_s'),$('scale'));
+bindPair($('jit_s'),$('jit'));
+bindPair($('gest_ms_s'),$('gest_ms'));
 async function doSave(){
   if(loading)return;
   if($('ch_lr').value==$('ch_ud').value){$('msg').textContent='通道冲突';return;}
@@ -165,6 +201,8 @@ async function doSave(){
   p.set('mount_horiz',$('mount_horiz').value);
   p.set('mount_lr',$('mount_lr').value);
   p.set('mount_fb',$('mount_fb').value);
+  p.set('gest_roll_deg',$('gest_roll').value);
+  p.set('gest_swing_ms',$('gest_ms').value);
   try{
     const r=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p.toString()});
     const j=await r.json();

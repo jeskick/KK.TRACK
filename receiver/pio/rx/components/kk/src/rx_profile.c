@@ -20,6 +20,8 @@ kk_rx_profile_t kk_rx_profile_defaults(void)
         .mount_horiz = 0,
         .mount_lr = 0,
         .mount_fb = 0,
+        .gest_roll_deg = KK_GEST_ROLL_DEG_DEFAULT,
+        .gest_swing_ms = KK_GEST_SWING_MS_DEFAULT,
     };
     return p;
 }
@@ -124,6 +126,23 @@ void kk_rx_profile_sanitize(kk_rx_profile_t *p)
     p->mount_horiz &= 3U;
     p->mount_lr &= 3U;
     p->mount_fb &= 3U;
+    kk_gesture_cfg_t g = {
+        .roll_deg = p->gest_roll_deg,
+        .swing_ms = p->gest_swing_ms,
+    };
+    kk_gesture_cfg_sanitize(&g);
+    p->gest_roll_deg = g.roll_deg;
+    p->gest_swing_ms = g.swing_ms;
+}
+
+void kk_rx_profile_gesture_to_cfg(const kk_rx_profile_t *p, kk_gesture_cfg_t *out)
+{
+    if (!p || !out) {
+        return;
+    }
+    out->roll_deg = p->gest_roll_deg;
+    out->swing_ms = p->gest_swing_ms;
+    kk_gesture_cfg_sanitize(out);
 }
 
 void kk_rx_profile_mount_to_imu(const kk_rx_profile_t *p, kk_imu_mount_t *out)
@@ -224,6 +243,13 @@ void kk_rx_profile_load(kk_rx_profile_t *out)
     if (nvs_get_u8(h, "m_fb", &v8) == ESP_OK) {
         out->mount_fb = v8;
     }
+    if (nvs_get_u8(h, "g_roll", &v8) == ESP_OK) {
+        out->gest_roll_deg = v8;
+    }
+    uint16_t v16u2;
+    if (nvs_get_u16(h, "g_ms", &v16u2) == ESP_OK) {
+        out->gest_swing_ms = v16u2;
+    }
     nvs_close(h);
     kk_rx_profile_sanitize(out);
 }
@@ -251,6 +277,8 @@ void kk_rx_profile_save(const kk_rx_profile_t *cfg)
     nvs_set_u8(h, "m_horiz", p.mount_horiz);
     nvs_set_u8(h, "m_lr", p.mount_lr);
     nvs_set_u8(h, "m_fb", p.mount_fb);
+    nvs_set_u8(h, "g_roll", p.gest_roll_deg);
+    nvs_set_u16(h, "g_ms", p.gest_swing_ms);
     nvs_commit(h);
     nvs_close(h);
 }

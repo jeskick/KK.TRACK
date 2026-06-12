@@ -1,5 +1,6 @@
 #include "ble_rx.h"
 
+#include "kk/gesture_cfg.h"
 #include "kk/imu_mount.h"
 #include "kk/link_config.h"
 #include "kk/repair.h"
@@ -297,6 +298,20 @@ void kk_ble_rx_send_mount(const kk_imu_mount_t *mount)
              deg_lut[mount->rot_horiz & 3U],
              deg_lut[mount->rot_lr & 3U],
              deg_lut[mount->rot_fb & 3U]);
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, strlen(buf));
+    if (om) {
+        ble_gatts_notify_custom(s_conn_handle, s_link_val_handle, om);
+        ESP_LOGW(TAG, "notify TX %s", buf);
+    }
+}
+
+void kk_ble_rx_send_gesture(const kk_gesture_cfg_t *cfg)
+{
+    if (!cfg || s_conn_handle == BLE_HS_CONN_HANDLE_NONE || s_link_val_handle == 0) {
+        return;
+    }
+    char buf[20];
+    snprintf(buf, sizeof(buf), "GES,%u,%u", cfg->roll_deg, cfg->swing_ms);
     struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, strlen(buf));
     if (om) {
         ble_gatts_notify_custom(s_conn_handle, s_link_val_handle, om);

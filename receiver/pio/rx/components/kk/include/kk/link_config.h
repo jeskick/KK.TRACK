@@ -44,3 +44,10 @@
 
 #define KK_BLE_REPAIR_CMD        "REPAIR"
 #define KK_BLE_CENTER_CMD        "CENTER"
+
+/* TX：逻辑 Roll 左右快速摆动 → 回正稳定后自动回中（与物理短按相同） */
+/* 摆动角度/超时由 RX 网页配置，经 BLE GES 同步；见 gesture_cfg.h */
+#define KK_TX_ROLL_NEUT_DEG            10.0f
+#define KK_TX_ROLL_SETTLE_MS           700UL
+#define KK_TX_ROLL_SETTLE_TIMEOUT_MS   1500UL
+#define KK_TX_ROLL_GESTURE_COOLDOWN_MS 4000UL

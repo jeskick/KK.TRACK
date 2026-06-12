@@ -115,6 +115,13 @@ static void sync_mount_to_tx(const kk_imu_mount_t *mount)
     }
 }
 
+static void sync_gesture_to_tx(const kk_gesture_cfg_t *cfg)
+{
+    if (cfg) {
+        kk_ble_rx_send_gesture(cfg);
+    }
+}
+
 static void on_ble_connect(void)
 {
     s_ble_on = true;
@@ -124,6 +131,9 @@ static void on_ble_connect(void)
     kk_imu_mount_t m;
     kk_rx_profile_mount_to_imu(&g_profile, &m);
     sync_mount_to_tx(&m);
+    kk_gesture_cfg_t g;
+    kk_rx_profile_gesture_to_cfg(&g_profile, &g);
+    sync_gesture_to_tx(&g);
 }
 
 static void on_ble_telemetry(void)
@@ -219,6 +229,7 @@ static void app_init(void)
 
     kk_wifi_rx_init();
     kk_rx_web_set_mount_sync(sync_mount_to_tx);
+    kk_rx_web_set_gesture_sync(sync_gesture_to_tx);
     kk_ble_rx_set_on_connect(on_ble_connect);
     kk_ble_rx_set_on_disconnect(on_ble_disconnect);
     kk_ble_rx_set_on_repair_peer(on_repair_from_tx);

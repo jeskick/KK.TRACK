@@ -1,5 +1,7 @@
 #include "ble_tx.h"
+#include "gesture_center.h"
 #include "imu_tx.h"
+#include "tx_gesture.h"
 
 #include "kk/board_tx.h"
 #include "kk/led.h"
@@ -36,6 +38,7 @@ static bool s_imu_ok;
 static uint8_t s_green_code;
 
 static void repair_enter_local(bool notify_peer);
+static void center_enter(bool notify_peer);
 
 static void led_update(void)
 {
@@ -50,11 +53,18 @@ static void led_update(void)
     kk_led_apply(PIN_LED_BLUE, PIN_LED_GREEN, &in, &s_led_code);
 }
 
+static void on_gesture_center(void)
+{
+    ESP_LOGW(TAG, "[CENTER] roll gesture");
+    center_enter(true);
+}
+
 static void center_enter(bool notify_peer)
 {
     if (s_imu_ok) {
         kk_imu_tx_rezero();
     }
+    kk_gesture_center_suppress(kk_millis());
     ESP_LOGW(TAG, "[CENTER] IMU re-zero");
 #if KK_TX_IMU_DEBUG_SERIAL
     printf("# re-zero\n");
@@ -138,7 +148,12 @@ static void on_ble_lost(void)
 
 static void poll_imu(void)
 {
-    kk_imu_tx_poll();
+    if (!kk_imu_tx_poll()) {
+        return;
+    }
+    if (kk_imu_tx_has_pose()) {
+        kk_gesture_center_poll(kk_imu_tx_roll_deg(), kk_millis());
+    }
 }
 
 static void tel_poll_imu(void)
@@ -280,6 +295,9 @@ static void app_init(void)
         ESP_LOGE(TAG, "IMU init failed");
     } else {
         s_green_code = KK_GCODE_NONE;
+        kk_tx_gesture_load(NULL);
+        kk_gesture_center_init(on_gesture_center);
+        ESP_LOGW(TAG, "gesture center: roll swing -> settle -> auto center");
     }
 
 #if KK_TX_IMU_DEBUG_SERIAL
@@ -289,7 +307,7 @@ static void app_init(void)
     s_paired = kk_storage_load_paired(s_rx_mac, sizeof(s_rx_mac));
     ESP_LOGW(TAG, "=== Track.KK.TX (ESP-IDF) ===");
     ESP_LOGW(TAG, "telemetry: IMU yaw/pitch @%lums", (unsigned long)KK_BLE_TEL_MS);
-    ESP_LOGW(TAG, "btn: tap=center  hold 5s=repair");
+    ESP_LOGW(TAG, "btn: tap=center  hold 5s=repair  roll-swing=auto center");
     kk_ble_tx_set_on_disconnect(on_ble_lost);
     kk_ble_tx_set_on_repair_peer(on_repair_from_rx);
     kk_ble_tx_set_on_center_peer(on_center_from_rx);

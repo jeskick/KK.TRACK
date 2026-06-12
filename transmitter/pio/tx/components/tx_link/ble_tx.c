@@ -1,6 +1,8 @@
 #include "ble_tx.h"
 #include "imu_tx.h"
+#include "tx_gesture.h"
 
+#include "kk/gesture_cfg.h"
 #include "kk/imu_mount.h"
 #include "kk/link_config.h"
 #include "kk/repair.h"
@@ -309,6 +311,12 @@ static int kk_ble_tx_gap_event(struct ble_gap_event *event, void *arg)
         if (kk_mount_cmd_parse(line, len, &mount)) {
             kk_imu_tx_set_mount(&mount);
             ESP_LOGW(TAG, "mount from RX %s", line);
+            return 0;
+        }
+        kk_gesture_cfg_t gesture;
+        if (kk_gesture_cmd_parse(line, len, &gesture)) {
+            kk_tx_gesture_apply(&gesture);
+            ESP_LOGW(TAG, "gesture from RX %s", line);
         }
         return 0;
     }

@@ -2,6 +2,7 @@
 #include "kk/rx_web_page.h"
 #include "kk/head_track.h"
 #include "kk/imu_mount.h"
+#include "kk/gesture_cfg.h"
 #include "kk/rx_profile.h"
 #include "kk/telemetry.h"
 
@@ -19,6 +20,7 @@ static httpd_handle_t s_server;
 static kk_rx_profile_t *s_profile;
 static uint32_t s_last_http_ms;
 static kk_rx_web_mount_sync_cb_t s_mount_sync;
+static kk_rx_web_gesture_sync_cb_t s_gesture_sync;
 
 static void kk_rx_web_touch(void)
 {
@@ -39,13 +41,15 @@ static void kk_rx_web_json_config(char *buf, size_t cap)
     snprintf(buf, cap,
              "{\"ch_lr\":%u,\"ch_ud\":%u,\"offset_lr\":%d,\"offset_ud\":%d,"
              "\"scale_lr\":%u,\"jitter_x10\":%u,\"yaw_servo_deg\":%u,\"rev_lr\":%u,\"rev_ud\":%u,"
-             "\"mount_horiz\":%u,\"mount_lr\":%u,\"mount_fb\":%u}",
+             "\"mount_horiz\":%u,\"mount_lr\":%u,\"mount_fb\":%u,"
+             "\"gest_roll_deg\":%u,\"gest_swing_ms\":%u}",
              s_profile->ch_lr, s_profile->ch_ud, s_profile->offset_lr, s_profile->offset_ud,
              s_profile->scale_lr, s_profile->jitter_x10, s_profile->yaw_servo_deg,
              s_profile->rev_lr ? 1U : 0U, s_profile->rev_ud ? 1U : 0U,
              kk_imu_mount_steps_to_deg(s_profile->mount_horiz),
              kk_imu_mount_steps_to_deg(s_profile->mount_lr),
-             kk_imu_mount_steps_to_deg(s_profile->mount_fb));
+             kk_imu_mount_steps_to_deg(s_profile->mount_fb),
+             s_profile->gest_roll_deg, s_profile->gest_swing_ms);
 }
 
 static esp_err_t root_get(httpd_req_t *req)
@@ -78,7 +82,7 @@ static esp_err_t status_get(httpd_req_t *req)
 static esp_err_t config_get(httpd_req_t *req)
 {
     kk_rx_web_touch();
-    char buf[360];
+    char buf[420];
     kk_rx_web_json_config(buf, sizeof(buf));
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
@@ -125,6 +129,8 @@ static esp_err_t save_post(httpd_req_t *req)
     p.mount_horiz = kk_imu_mount_deg_to_steps((uint16_t)kk_web_arg_int(body, "mount_horiz", 0));
     p.mount_lr = kk_imu_mount_deg_to_steps((uint16_t)kk_web_arg_int(body, "mount_lr", 0));
     p.mount_fb = kk_imu_mount_deg_to_steps((uint16_t)kk_web_arg_int(body, "mount_fb", 0));
+    p.gest_roll_deg = (uint8_t)kk_web_arg_int(body, "gest_roll_deg", (int)p.gest_roll_deg);
+    p.gest_swing_ms = (uint16_t)kk_web_arg_int(body, "gest_swing_ms", (int)p.gest_swing_ms);
     kk_rx_profile_sanitize(&p);
     *s_profile = p;
     kk_rx_profile_save(s_profile);
@@ -134,13 +140,19 @@ static esp_err_t save_post(httpd_req_t *req)
         kk_rx_profile_mount_to_imu(s_profile, &m);
         s_mount_sync(&m);
     }
+    if (s_gesture_sync) {
+        kk_gesture_cfg_t g;
+        kk_rx_profile_gesture_to_cfg(s_profile, &g);
+        s_gesture_sync(&g);
+    }
 
-    ESP_LOGW(TAG, "[WEB] save ch_lr=%u ch_ud=%u yaw_srv=%u off_lr=%d off_ud=%d scale=%u jit=%u rev=%u/%u",
+    ESP_LOGW(TAG, "[WEB] save ch_lr=%u ch_ud=%u yaw_srv=%u off_lr=%d off_ud=%d scale=%u jit=%u rev=%u/%u gest=%u/%u",
              p.ch_lr, p.ch_ud, p.yaw_servo_deg, (int)p.offset_lr, (int)p.offset_ud,
-             p.scale_lr, p.jitter_x10, p.rev_lr ? 1U : 0U, p.rev_ud ? 1U : 0U);
+             p.scale_lr, p.jitter_x10, p.rev_lr ? 1U : 0U, p.rev_ud ? 1U : 0U,
+             p.gest_roll_deg, p.gest_swing_ms);
 
-    char cfg[280];
-    char out[420];
+    char cfg[360];
+    char out[480];
     kk_rx_web_json_config(cfg, sizeof(cfg));
     snprintf(out, sizeof(out), "{\"ok\":true,\"cfg\":%s}", cfg);
     httpd_resp_set_type(req, "application/json");
@@ -160,9 +172,14 @@ static esp_err_t reset_post(httpd_req_t *req)
         kk_rx_profile_mount_to_imu(s_profile, &m);
         s_mount_sync(&m);
     }
+    if (s_gesture_sync) {
+        kk_gesture_cfg_t g;
+        kk_rx_profile_gesture_to_cfg(s_profile, &g);
+        s_gesture_sync(&g);
+    }
     ESP_LOGW(TAG, "[WEB] reset defaults");
-    char cfg[280];
-    char out[420];
+    char cfg[360];
+    char out[480];
     kk_rx_web_json_config(cfg, sizeof(cfg));
     snprintf(out, sizeof(out), "{\"ok\":true,\"cfg\":%s}", cfg);
     httpd_resp_set_type(req, "application/json");
@@ -172,6 +189,11 @@ static esp_err_t reset_post(httpd_req_t *req)
 void kk_rx_web_set_mount_sync(kk_rx_web_mount_sync_cb_t cb)
 {
     s_mount_sync = cb;
+}
+
+void kk_rx_web_set_gesture_sync(kk_rx_web_gesture_sync_cb_t cb)
+{
+    s_gesture_sync = cb;
 }
 
 void kk_rx_web_begin(kk_rx_profile_t *profile)

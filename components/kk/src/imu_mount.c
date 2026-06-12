@@ -94,7 +94,7 @@ static void kk_imu_euler_from_quat(kk_quat_t q, float *roll_x, float *pitch_y, f
     }
 }
 
-/* 与旧系数法相同的旋转方向：水平 Z-CW，左右 X-CCW，前后 Y-CCW */
+/* 旋转方向：水平 Z-CW，左右 X-CCW，前后 Y-CCW */
 static kk_quat_t kk_imu_mount_quat(const kk_imu_mount_t *mount)
 {
     kk_imu_mount_t m = mount ? *mount : kk_imu_mount_defaults();

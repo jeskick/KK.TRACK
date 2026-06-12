@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 
+#include "kk/gesture_cfg.h"
 #include "kk/imu_mount.h"
 typedef void (*kk_ble_rx_event_cb_t)(void);
 void kk_ble_rx_init(void);
@@ -10,6 +11,7 @@ void kk_ble_rx_start_adv(void);
 void kk_ble_rx_disconnect_peer(bool notify_peer);
 void kk_ble_rx_send_center(void);
 void kk_ble_rx_send_mount(const kk_imu_mount_t *mount);
+void kk_ble_rx_send_gesture(const kk_gesture_cfg_t *cfg);
 void kk_ble_rx_set_on_connect(kk_ble_rx_event_cb_t cb);
 void kk_ble_rx_set_on_disconnect(kk_ble_rx_event_cb_t cb);
 void kk_ble_rx_set_on_repair_peer(kk_ble_rx_event_cb_t cb);
