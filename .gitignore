@@ -14,8 +14,10 @@ build/
 # Fetch cache
 transmitter/pio/imu_test/_vendor/
 
-# Python venv (tools/imu_viewer)
+# Python
 tools/imu_viewer/.venv/
+__pycache__/
+*.pyc
 
 # IDE
 .theia/
