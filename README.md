@@ -18,13 +18,14 @@ TX 读 BNO085 → BLE 发姿态 → RX 输出 PPM 舵机；手机经 WiFi 网页
 ```powershell
 cd receiver\pio\rx    # 或 transmitter\pio\tx
 pio run -t upload --upload-port COMxx
+pio device monitor --port COMxx --baud 115200
 ```
 
-文档入口：**[docs/README.md](docs/README.md)**
+首次 clone 后若缺少 `components/kk` 联接，在本地运行 `docs/tools/link_kk_component.ps1`（文档目录仅保留在本地，不上传 GitHub）。
 
-| 常用 | 链接 |
-|------|------|
-| 烧录 / COM 口 | [docs/BUILD.md](docs/BUILD.md) |
-| 配对 / 网页 / LED | [docs/USAGE.md](docs/USAGE.md) |
-| 引脚 | [docs/HARDWARE.md](docs/HARDWARE.md) |
-| IMU 安装基准 | [docs/IMU_MOUNT_REFERENCE.md](docs/IMU_MOUNT_REFERENCE.md) |
+## 配对简述
+
+1. RX 上电 BLE 广播 `KK-TRACK-RX`，TX 扫描连接
+2. BLE 稳定后 RX 开 WiFi `TRACK-KK` / `12345678`
+3. 浏览器 **http://192.168.4.1** 调通道、偏移、IMU 安装角
+4. 短按 GPIO9 归零；长按 5s 重配对
