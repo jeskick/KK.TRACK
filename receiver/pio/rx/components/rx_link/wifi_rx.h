@@ -1,0 +1,9 @@
+#pragma once
+#include <stdbool.h>
+void kk_wifi_rx_init(void);
+bool kk_wifi_rx_is_on(void);
+bool kk_wifi_rx_ap_ready(void);
+void kk_wifi_rx_ap_start(void);
+void kk_wifi_rx_ap_stop(void);
+void kk_wifi_rx_idle_poll(void);
+void kk_wifi_rx_udp_poll(void);

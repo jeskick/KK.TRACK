@@ -1,0 +1,15 @@
+#include "kk/time.h"
+
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+uint32_t kk_millis(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000ULL);
+}
+
+void kk_delay_ms(uint32_t ms)
+{
+    vTaskDelay(pdMS_TO_TICKS(ms));
+}

@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>KK-TRACK RX</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;background:#0f1419;color:#e7ecf3;line-height:1.4;padding:10px;max-width:480px;margin:0 auto;font-size:14px}
+h1{font-size:1.1rem;margin-bottom:10px;color:#8ec8ff}
+h2{font-size:.88rem;margin:0 0 8px;color:#9aa7b8;font-weight:600}
+.card{background:#1a2332;border-radius:10px;padding:10px;margin-bottom:8px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}
+.item label{display:block;font-size:.7rem;color:#8b98a8}
+.item .val{font-size:.95rem;font-weight:600}
+.line{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.line>label{color:#b8c5d6;white-space:nowrap}
+.in40{width:40px;min-width:40px;padding:4px 2px;border:1px solid #2d3a4d;border-radius:6px;background:#121a24;color:#fff;font-size:14px;text-align:center}
+.sel{width:52px;padding:4px;border:1px solid #2d3a4d;border-radius:6px;background:#121a24;color:#fff;font-size:14px}
+.sel-yaw{width:62px}
+input[type=range]{width:100%;margin:4px 0 2px;height:22px}
+.hint{font-size:.68rem;color:#6d7a8a;margin:-2px 0 6px}
+.btns{display:flex;gap:8px;margin-top:6px}
+.btn{flex:1;padding:10px;border:0;border-radius:8px;font-size:.9rem;color:#fff}
+.btn-reset{background:#3d4a5c}
+.btn-reset:active{background:#2a3544}
+.msg{flex:2;font-size:.75rem;color:#7dffb2;line-height:2.2;text-align:right}
+.chk{display:flex;align-items:center;gap:4px;color:#b8c5d6;font-size:.85rem}
+.chk input{width:16px;height:16px}
+</style>
+</head>
+<body>
+<h1>KK-TRACK 接收机</h1>
+<div class="card">
+<h2>信息</h2>
+<div class="grid2">
+<div class="item"><label>左右 µs</label><div class="val" id="plr">--</div></div>
+<div class="item"><label>上下 µs</label><div class="val" id="pud">--</div></div>
+</div>
+</div>
+<div class="card">
+<h2>设置 <span class="msg" id="msg"></span></h2>
+<form id="cfg">
+<div class="line">
+<label>YAW→CH</label><select class="sel" name="ch_lr" id="ch_lr"></select>
+<label>PITCH→CH</label><select class="sel" name="ch_ud" id="ch_ud"></select>
+</div>
+<div class="line">
+<label>水平转°</label><select class="sel" id="mount_horiz"></select>
+<label>左右轴°</label><select class="sel" id="mount_lr"></select>
+<label>前后轴°</label><select class="sel" id="mount_fb"></select>
+</div>
+<p class="hint">安装方向：默认 YAW←Z、PITCH←X（圆点右下平放）。水平=绕Yaw轴；左右轴=绕Pitch轴；前后轴=绕Roll轴。改角度后同步到 TX。</p>
+<div class="line">
+<label>YAW舵机</label><select class="sel sel-yaw" id="yaw_servo"></select>
+<label class="chk"><input type="checkbox" id="rev_lr">YAW-REV</label>
+<label class="chk"><input type="checkbox" id="rev_ud">PITCH-REV</label>
+</div>
+<p class="hint">YAW：180°=1000–2000µs；270°=500–2500µs，中位均为1500。偏移仍可用于个体微调。</p>
+<div class="line">
+<label>左右偏移µs</label><input class="in40" type="number" name="offset_lr" id="off_lr" min="-400" max="400">
+</div>
+<input type="range" id="off_lr_s" min="-400" max="400" step="1">
+<div class="line">
+<label>上下偏移µs</label><input class="in40" type="number" name="offset_ud" id="off_ud" min="-400" max="400">
+</div>
+<input type="range" id="off_ud_s" min="-400" max="400" step="1">
+<div class="line">
+<label>左右比例</label><input class="in40" type="number" name="scale_lr" id="scale" min="1" max="100">
+<span style="color:#6d7a8a;font-size:.72rem">50=100%</span>
+</div>
+<input type="range" id="scale_s" min="1" max="100" step="1">
+<p class="hint">每+10 放大1倍（60→2×，70→3×），仅YAW通道</p>
+<div class="line">
+<label>抖动°</label><input class="in40" type="number" name="jitter_x10" id="jit" min="0" max="200">
+</div>
+<input type="range" id="jit_s" min="0" max="200" step="1">
+<div class="btns">
+<button type="button" class="btn btn-reset" id="btnReset">重置参数</button>
+</div>
+</form>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+let saveT=null,loading=false;
+function fillCh(sel,val){
+  sel.innerHTML='';
+  for(let c=5;c<=8;c++){
+    const o=document.createElement('option');
+    o.value=c;o.textContent='CH'+c;
+    o.selected=(c==val);
+    sel.appendChild(o);
+  }
+}
+function fillYawServo(sel,val){
+  sel.innerHTML='';
+  [180,270].forEach(d=>{
+    const o=document.createElement('option');
+    o.value=d;o.textContent=d+'°';
+    o.selected=(d==val);
+    sel.appendChild(o);
+  });
+}
+function fillRot(sel,val){
+  sel.innerHTML='';
+  [0,90,180,270].forEach(d=>{
+    const o=document.createElement('option');
+    o.value=d;o.textContent=d+'°';
+    o.selected=(d==val);
+    sel.appendChild(o);
+  });
+}
+function bindPair(s,n){
+  const pull=()=>{n.value=s.value;};
+  s.oninput=()=>{pull();scheduleSave();};
+  n.oninput=()=>{s.value=n.value;pull();scheduleSave();};
+  pull();
+}
+function loadCfg(d){
+  loading=true;
+  fillCh($('ch_lr'),d.ch_lr);
+  fillCh($('ch_ud'),d.ch_ud);
+  $('off_lr').value=d.offset_lr;$('off_lr_s').value=d.offset_lr;
+  $('off_ud').value=d.offset_ud;$('off_ud_s').value=d.offset_ud;
+  $('scale').value=d.scale_lr;$('scale_s').value=d.scale_lr;
+  $('jit').value=d.jitter_x10;$('jit_s').value=d.jitter_x10;
+  fillYawServo($('yaw_servo'),d.yaw_servo_deg||180);
+  $('rev_lr').checked=!!d.rev_lr;
+  $('rev_ud').checked=!!d.rev_ud;
+  fillRot($('mount_horiz'),d.mount_horiz||0);
+  fillRot($('mount_lr'),d.mount_lr||0);
+  fillRot($('mount_fb'),d.mount_fb||0);
+  bindPair($('off_lr_s'),$('off_lr'));
+  bindPair($('off_ud_s'),$('off_ud'));
+  bindPair($('scale_s'),$('scale'));
+  bindPair($('jit_s'),$('jit'));
+  loading=false;
+}
+function fixCh(){
+  if($('ch_lr').value==$('ch_ud').value){
+    $('ch_ud').value=$('ch_lr').value==8?5:parseInt($('ch_lr').value,10)+1;
+  }
+}
+$('ch_lr').onchange=()=>{fixCh();scheduleSave();};
+$('ch_ud').onchange=()=>{fixCh();scheduleSave();};
+$('yaw_servo').onchange=scheduleSave;
+$('rev_lr').onchange=scheduleSave;
+$('rev_ud').onchange=scheduleSave;
+$('mount_horiz').onchange=scheduleSave;
+$('mount_lr').onchange=scheduleSave;
+$('mount_fb').onchange=scheduleSave;
+async function doSave(){
+  if(loading)return;
+  if($('ch_lr').value==$('ch_ud').value){$('msg').textContent='通道冲突';return;}
+  const p=new URLSearchParams();
+  p.set('ch_lr',$('ch_lr').value);
+  p.set('ch_ud',$('ch_ud').value);
+  p.set('offset_lr',$('off_lr').value);
+  p.set('offset_ud',$('off_ud').value);
+  p.set('scale_lr',$('scale').value);
+  p.set('jitter_x10',$('jit').value);
+  p.set('yaw_servo_deg',$('yaw_servo').value);
+  p.set('rev_lr',$('rev_lr').checked?1:0);
+  p.set('rev_ud',$('rev_ud').checked?1:0);
+  p.set('mount_horiz',$('mount_horiz').value);
+  p.set('mount_lr',$('mount_lr').value);
+  p.set('mount_fb',$('mount_fb').value);
+  try{
+    const r=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p.toString()});
+    const j=await r.json();
+    $('msg').textContent=j.ok?'已保存':'失败';
+    if(j.ok&&j.cfg)loadCfg(j.cfg);
+  }catch(e){$('msg').textContent='失败';}
+}
+function scheduleSave(){
+  clearTimeout(saveT);
+  $('msg').textContent='…';
+  saveT=setTimeout(doSave,450);
+}
+async function poll(){
+  try{
+    const r=await fetch('/api/status');const j=await r.json();
+    $('plr').textContent=j.ppm_lr+' µs (CH'+j.ch_lr+')';
+    $('pud').textContent=j.ppm_ud+' µs (CH'+j.ch_ud+')';
+  }catch(e){}
+}
+$('btnReset').onclick=async()=>{
+  if(!confirm('恢复默认参数？'))return;
+  try{
+    const r=await fetch('/api/reset',{method:'POST'});
+    const j=await r.json();
+    if(j.ok&&j.cfg){loadCfg(j.cfg);$('msg').textContent='已重置';}
+  }catch(e){$('msg').textContent='失败';}
+};
+fetch('/api/config').then(r=>r.json()).then(loadCfg);
+setInterval(poll,500);poll();
+</script>
+</body>
+</html>

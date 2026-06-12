@@ -1,0 +1,24 @@
+# 本地文档不上传
+docs/
+
+# PlatformIO
+.pio/
+.piolibdeps/
+
+# ESP-IDF generated
+sdkconfig
+sdkconfig.*
+!sdkconfig.defaults
+build/
+
+# Fetch cache
+transmitter/pio/imu_test/_vendor/
+
+# Python venv (tools/imu_viewer)
+tools/imu_viewer/.venv/
+
+# IDE
+.theia/
+.vscode/
+*.swp
+*~
