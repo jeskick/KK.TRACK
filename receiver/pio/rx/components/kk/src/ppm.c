@@ -14,6 +14,10 @@
 
 #include "esp_log.h"
 
+#include "freertos/FreeRTOS.h"
+
+#include "freertos/portmacro.h"
+
 
 
 static const char *TAG = "kk.ppm";
@@ -42,6 +46,10 @@ typedef struct {
 
 static kk_ppm_state_t s_ppm;
 
+static kk_ppm_state_t s_ppm_frame;
+
+static portMUX_TYPE s_ppm_mux = portMUX_INITIALIZER_UNLOCKED;
+
 static gptimer_handle_t s_timer;
 
 static volatile uint8_t s_ch;
@@ -60,7 +68,7 @@ static uint16_t IRAM_ATTR kk_ppm_sync_us_calc(void)
 
     for (int i = 0; i < KK_PPM_CH_COUNT; i++) {
 
-        used += s_ppm.us[i];
+        used += s_ppm_frame.us[i];
 
     }
 
@@ -170,7 +178,7 @@ static bool IRAM_ATTR kk_ppm_on_alarm(gptimer_handle_t timer,
 
         s_st = KK_PPM_ST_PULSE_HI;
 
-        alarm.alarm_count = s_ppm.us[s_ch];
+        alarm.alarm_count = s_ppm_frame.us[s_ch];
 
         break;
 
@@ -186,7 +194,7 @@ static bool IRAM_ATTR kk_ppm_on_alarm(gptimer_handle_t timer,
 
         s_st = KK_PPM_ST_PULSE_HI;
 
-        alarm.alarm_count = s_ppm.us[0];
+        alarm.alarm_count = s_ppm_frame.us[0];
 
         break;
 
@@ -250,6 +258,8 @@ void kk_ppm_begin(void)
 
         s_ppm.us[i] = KK_RX_PPM_CENTER;
 
+        s_ppm_frame.us[i] = KK_RX_PPM_CENTER;
+
     }
 
 
@@ -292,7 +302,7 @@ void kk_ppm_begin(void)
 
     ESP_ERROR_CHECK(gptimer_enable(s_timer));
 
-    ESP_ERROR_CHECK(kk_ppm_schedule_us(s_ppm.us[0]));
+    ESP_ERROR_CHECK(kk_ppm_schedule_us(s_ppm_frame.us[0]));
 
     ESP_ERROR_CHECK(gptimer_start(s_timer));
 
@@ -342,7 +352,15 @@ void kk_ppm_commit(void)
 
 {
 
-    /* GPTimer ISR reads s_ppm.us live; no restart needed. */
+    portENTER_CRITICAL(&s_ppm_mux);
+
+    for (int i = 0; i < KK_PPM_CH_COUNT; i++) {
+
+        s_ppm_frame.us[i] = s_ppm.us[i];
+
+    }
+
+    portEXIT_CRITICAL(&s_ppm_mux);
 
 }
 
@@ -373,6 +391,8 @@ void kk_ppm_fill_center(void)
         s_ppm.us[i] = KK_RX_PPM_CENTER;
 
     }
+
+    kk_ppm_commit();
 
 }
 

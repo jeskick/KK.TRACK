@@ -3,6 +3,8 @@
 #include "tx_gesture.h"
 
 #include "kk/gesture_cfg.h"
+#include "kk/tx_track_cfg.h"
+#include "imu_tx.h"
 #include "kk/imu_mount.h"
 #include "kk/link_config.h"
 #include "kk/repair.h"
@@ -10,6 +12,8 @@
 #include "kk/time.h"
 
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
@@ -37,6 +41,64 @@ static kk_ble_tx_event_cb_t s_on_center_peer;
 static bool s_host_ready;
 static uint16_t s_disc_total;
 static uint16_t s_disc_logged;
+
+#define KK_BLE_TX_F_REPAIR  (1u << 0)
+#define KK_BLE_TX_F_CENTER  (1u << 1)
+#define KK_BLE_TX_F_MOUNT   (1u << 2)
+#define KK_BLE_TX_F_GESTURE (1u << 3)
+#define KK_BLE_TX_F_TRACK   (1u << 4)
+
+static portMUX_TYPE s_pending_mux = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint32_t s_pending_flags;
+static kk_imu_mount_t s_pending_mount;
+static kk_gesture_cfg_t s_pending_gesture;
+static kk_tx_track_cfg_t s_pending_track;
+
+static void kk_ble_tx_flag(uint32_t bit)
+{
+    portENTER_CRITICAL(&s_pending_mux);
+    s_pending_flags |= bit;
+    portEXIT_CRITICAL(&s_pending_mux);
+}
+
+void kk_ble_tx_poll(void)
+{
+    uint32_t flags;
+    kk_imu_mount_t mount;
+    kk_gesture_cfg_t gesture;
+    kk_tx_track_cfg_t track;
+
+    portENTER_CRITICAL(&s_pending_mux);
+    flags = s_pending_flags;
+    s_pending_flags = 0;
+    mount = s_pending_mount;
+    gesture = s_pending_gesture;
+    track = s_pending_track;
+    portEXIT_CRITICAL(&s_pending_mux);
+
+    if (flags & KK_BLE_TX_F_REPAIR) {
+        if (s_on_repair_peer) {
+            s_on_repair_peer();
+        }
+    }
+    if (flags & KK_BLE_TX_F_CENTER) {
+        if (s_on_center_peer) {
+            s_on_center_peer();
+        }
+    }
+    if (flags & KK_BLE_TX_F_MOUNT) {
+        kk_imu_tx_set_mount(&mount);
+        ESP_LOGW(TAG, "mount from RX (deferred)");
+    }
+    if (flags & KK_BLE_TX_F_GESTURE) {
+        kk_tx_gesture_apply(&gesture);
+        ESP_LOGW(TAG, "gesture from RX (deferred)");
+    }
+    if (flags & KK_BLE_TX_F_TRACK) {
+        kk_imu_tx_apply_track_cfg(&track);
+        ESP_LOGW(TAG, "track from RX (deferred)");
+    }
+}
 
 static int kk_ble_tx_gap_event(struct ble_gap_event *event, void *arg);
 static int kk_ble_tx_on_disc(uint16_t conn_handle, const struct ble_gatt_error *error,
@@ -287,21 +349,21 @@ static int kk_ble_tx_gap_event(struct ble_gap_event *event, void *arg)
         return 0;
 
     case BLE_GAP_EVENT_NOTIFY_RX: {
-        uint8_t buf[16];
+        uint8_t buf[32];
         uint16_t len = OS_MBUF_PKTLEN(event->notify_rx.om);
         if (len > sizeof(buf)) {
             len = sizeof(buf);
         }
         os_mbuf_copydata(event->notify_rx.om, 0, len, buf);
-        if (kk_repair_cmd_match(buf, len) && s_on_repair_peer) {
-            s_on_repair_peer();
+        if (kk_repair_cmd_match(buf, len)) {
+            kk_ble_tx_flag(KK_BLE_TX_F_REPAIR);
             return 0;
         }
-        if (kk_center_cmd_match(buf, len) && s_on_center_peer) {
-            s_on_center_peer();
+        if (kk_center_cmd_match(buf, len)) {
+            kk_ble_tx_flag(KK_BLE_TX_F_CENTER);
             return 0;
         }
-        char line[24];
+        char line[32];
         if (len >= sizeof(line)) {
             len = sizeof(line) - 1;
         }
@@ -309,14 +371,26 @@ static int kk_ble_tx_gap_event(struct ble_gap_event *event, void *arg)
         line[len] = '\0';
         kk_imu_mount_t mount;
         if (kk_mount_cmd_parse(line, len, &mount)) {
-            kk_imu_tx_set_mount(&mount);
-            ESP_LOGW(TAG, "mount from RX %s", line);
+            portENTER_CRITICAL(&s_pending_mux);
+            s_pending_mount = mount;
+            s_pending_flags |= KK_BLE_TX_F_MOUNT;
+            portEXIT_CRITICAL(&s_pending_mux);
             return 0;
         }
         kk_gesture_cfg_t gesture;
         if (kk_gesture_cmd_parse(line, len, &gesture)) {
-            kk_tx_gesture_apply(&gesture);
-            ESP_LOGW(TAG, "gesture from RX %s", line);
+            portENTER_CRITICAL(&s_pending_mux);
+            s_pending_gesture = gesture;
+            s_pending_flags |= KK_BLE_TX_F_GESTURE;
+            portEXIT_CRITICAL(&s_pending_mux);
+            return 0;
+        }
+        kk_tx_track_cfg_t track;
+        if (kk_track_cmd_parse(line, len, &track)) {
+            portENTER_CRITICAL(&s_pending_mux);
+            s_pending_track = track;
+            s_pending_flags |= KK_BLE_TX_F_TRACK;
+            portEXIT_CRITICAL(&s_pending_mux);
         }
         return 0;
     }

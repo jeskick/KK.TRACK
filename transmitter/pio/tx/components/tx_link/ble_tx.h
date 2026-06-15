@@ -14,3 +14,4 @@ void kk_ble_tx_disconnect(void);
 void kk_ble_tx_set_on_disconnect(kk_ble_tx_event_cb_t cb);
 void kk_ble_tx_set_on_repair_peer(kk_ble_tx_event_cb_t cb);
 void kk_ble_tx_set_on_center_peer(kk_ble_tx_event_cb_t cb);
+void kk_ble_tx_poll(void);

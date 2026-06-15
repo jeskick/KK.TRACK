@@ -174,13 +174,21 @@ bool BNO08x_initialize(BNO08x *device)
     if (device->cb_list == NULL)
     {
         ESP_LOGE(TAG, "BNO08x_initialize failed, failed to allocate memory for cb_list.");
+        return false;
     }
 
     device->cb_list->callbacks = NULL;
     device->cb_list->length = 0;
 
     device->spi_task_hdl = NULL;
-    xTaskCreate(&BNO08x_spi_task, "bno08x_spi_task", 4096, (void *)device, device->imu_config.task_priority, &(device->spi_task_hdl)); // launch SPI task (data processing merged in)
+    if (xTaskCreate(&BNO08x_spi_task, "bno08x_spi_task", 4096, (void *)device, device->imu_config.task_priority,
+                    &(device->spi_task_hdl)) != pdPASS)
+    {
+        ESP_LOGE(TAG, "BNO08x_initialize failed, spi task create failed.");
+        free(device->cb_list);
+        device->cb_list = NULL;
+        return false;
+    }
 
     if (!BNO08x_hard_reset(device))
         return false;
@@ -487,7 +495,16 @@ bool BNO08x_receive_packet(BNO08x *device, bno08x_rx_packet_t *packet_out)
         return false;
     }
 
-    packet_out->length -= 4; // remove 4 header bytes from packet length (we already read those)
+    {
+        const uint16_t total_len = packet_out->length;
+        if (total_len < 5U || total_len > (uint16_t)(sizeof(packet_out->body) + 4U))
+        {
+            gpio_set_level(device->imu_config.io_cs, 1);
+            spi_device_release_bus(device->spi_hdl);
+            return false;
+        }
+        packet_out->length = total_len - 4U;
+    }
 
     // setup transacton to read the data packet
     device->spi_transaction.rx_buffer = packet_out->body;

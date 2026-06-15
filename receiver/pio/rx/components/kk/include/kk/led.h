@@ -22,7 +22,7 @@
 #define KK_LED_PWM_HZ        2000
 #define KK_LED_PWM_MAX       255
 #define KK_LED_BLUE_DUTY     KK_LED_PWM_MAX
-#define KK_LED_GREEN_DUTY    153
+#define KK_LED_GREEN_DUTY    122   /* ~60% of PWM max; was 153, -20% */
 
 typedef enum {
     KK_BLUE_SLOW = 0,

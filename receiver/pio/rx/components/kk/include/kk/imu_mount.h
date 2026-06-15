@@ -47,12 +47,17 @@ kk_quat_t kk_quat_from_bno(float i, float j, float k, float real);
 /** q_rel = conj(q_zero) * q_now */
 kk_quat_t kk_quat_rel(const kk_quat_t *q_now, const kk_quat_t *q_zero);
 
-/** q_zero 为归零时姿态；输出逻辑 yaw(Z)/pitch(X)/roll(Y) 度 */
+/** q_zero 为归零时姿态；输出逻辑 yaw(Z)/pitch(X)/roll(Y) 度（swing-twist 按轴分解，减轻耦合） */
 void kk_imu_mount_apply_quat(const kk_quat_t *q_now, const kk_quat_t *q_zero,
                              const kk_imu_mount_t *mount, float *yaw_deg,
                              float *pitch_deg, float *roll_deg);
 
 /** 从相对四元数提取传感器欧拉（调试用，与驱动公式一致） */
 void kk_imu_quat_to_sensor_rel(const kk_quat_t *q_rel, float sensor_rel[3]);
+
+/** 传感器系陀螺 (°/s) → 逻辑 pitch(X)/yaw(Z)/roll(Y) */
+void kk_imu_mount_gyro_to_logic(const kk_imu_mount_t *mount, float gx_dps,
+                                float gy_dps, float gz_dps, float *pitch_dps,
+                                float *yaw_dps, float *roll_dps);
 
 bool kk_mount_cmd_parse(const char *line, size_t len, kk_imu_mount_t *out);

@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 kk_telemetry_t g_kk_tel;
 
@@ -16,6 +17,9 @@ void kk_tel_reset(void)
 int kk_tel_format_pose(char *buf, size_t cap, float yaw_deg, float pitch_deg)
 {
     if (!buf || cap < 16) {
+        return 0;
+    }
+    if (!isfinite(yaw_deg) || !isfinite(pitch_deg)) {
         return 0;
     }
     const int n = snprintf(buf, cap, "yaw:%.1f,pitch:%.1f", yaw_deg, pitch_deg);
@@ -39,7 +43,7 @@ static bool kk_tel_parse_key_float(const char *s, const char *key, float *out)
         return false;
     }
     *out = strtof(p + 1, NULL);
-    return true;
+    return isfinite(*out);
 }
 
 void kk_tel_on_udp_payload(const char *buf)

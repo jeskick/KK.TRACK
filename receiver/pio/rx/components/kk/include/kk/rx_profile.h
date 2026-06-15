@@ -5,6 +5,7 @@
 
 #include "kk/gesture_cfg.h"
 #include "kk/imu_mount.h"
+#include "kk/tx_track_cfg.h"
 
 #define KK_RX_CH_MIN         5
 #define KK_RX_CH_MAX         8
@@ -43,6 +44,10 @@ typedef struct {
     uint8_t mount_fb;
     uint8_t gest_roll_deg;
     uint16_t gest_swing_ms;
+    bool track_decouple_en;
+    bool track_motion_en;
+    uint8_t track_decouple_str_x100;
+    uint8_t track_decouple_dom_x10;
 } kk_rx_profile_t;
 
 kk_rx_profile_t kk_rx_profile_defaults(void);
@@ -61,3 +66,4 @@ void kk_rx_profile_reset(kk_rx_profile_t *out);
 void kk_rx_profile_mount_to_imu(const kk_rx_profile_t *p, kk_imu_mount_t *out);
 void kk_rx_profile_mount_from_imu(kk_rx_profile_t *p, const kk_imu_mount_t *m);
 void kk_rx_profile_gesture_to_cfg(const kk_rx_profile_t *p, kk_gesture_cfg_t *out);
+void kk_rx_profile_track_to_cfg(const kk_rx_profile_t *p, kk_tx_track_cfg_t *out);

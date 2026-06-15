@@ -8,6 +8,7 @@
 #include "kk/repair.h"
 #include "kk/ppm.h"
 #include "kk/rx_profile.h"
+#include "kk/tx_track_cfg.h"
 #include "kk/rx_web.h"
 #include "kk/storage.h"
 #include "kk/telemetry.h"
@@ -62,10 +63,12 @@ static void led_update(void)
     const uint32_t now = kk_millis();
     const uint32_t pkt_age = g_kk_tel.last_pkt_ms > 0 ? now - g_kk_tel.last_pkt_ms : 0;
 
-    if (s_ble_on && g_kk_tel.last_pkt_ms > 0 && pkt_age > 5000) {
+    if (s_ppm_on && (!s_ble_on || kk_head_track_failsafe_active() ||
+                     (g_kk_tel.last_pkt_ms > 0 && pkt_age > KK_RX_FS_TEL_LOST_MS))) {
         in.err_code = KK_GCODE_NO_DATA;
     }
-    in.func_ok = s_ble_on && g_kk_tel.last_pkt_ms > 0 && pkt_age < 3000;
+    in.func_ok = s_ble_on && g_kk_tel.last_pkt_ms > 0 && pkt_age < KK_RX_FS_TEL_LOST_MS &&
+                 !kk_head_track_failsafe_active();
     in.func_prepare = s_ble_on && !in.func_ok && in.err_code == KK_GCODE_NONE;
 
     kk_led_apply(PIN_LED_BLUE, PIN_LED_GREEN, &in, &s_led_code);
@@ -92,6 +95,7 @@ static void repair_enter(bool notify_peer)
     s_web_pending = false;
     s_need_ppm = false;
     s_ppm_on = false;
+    kk_head_track_failsafe_reset();
     kk_ppm_stop();
     if (s_web_on) {
         kk_rx_web_stop();
@@ -122,6 +126,13 @@ static void sync_gesture_to_tx(const kk_gesture_cfg_t *cfg)
     }
 }
 
+static void sync_track_to_tx(const kk_tx_track_cfg_t *cfg)
+{
+    if (cfg) {
+        kk_ble_rx_send_track(cfg);
+    }
+}
+
 static void on_ble_connect(void)
 {
     s_ble_on = true;
@@ -134,15 +145,16 @@ static void on_ble_connect(void)
     kk_gesture_cfg_t g;
     kk_rx_profile_gesture_to_cfg(&g_profile, &g);
     sync_gesture_to_tx(&g);
+    kk_tx_track_cfg_t t;
+    kk_rx_profile_track_to_cfg(&g_profile, &t);
+    sync_track_to_tx(&t);
 }
 
 static void on_ble_telemetry(void)
 {
     if (!s_ppm_on) {
         s_need_ppm = true;
-        return;
     }
-    kk_head_track_apply(&g_profile);
 }
 
 static void on_ble_disconnect(void)
@@ -230,6 +242,7 @@ static void app_init(void)
     kk_wifi_rx_init();
     kk_rx_web_set_mount_sync(sync_mount_to_tx);
     kk_rx_web_set_gesture_sync(sync_gesture_to_tx);
+    kk_rx_web_set_track_sync(sync_track_to_tx);
     kk_ble_rx_set_on_connect(on_ble_connect);
     kk_ble_rx_set_on_disconnect(on_ble_disconnect);
     kk_ble_rx_set_on_repair_peer(on_repair_from_tx);
@@ -268,7 +281,8 @@ void app_main(void)
         if (s_need_ppm) {
             s_need_ppm = false;
             kk_ppm_begin();
-            kk_head_track_apply(&g_profile);
+            kk_head_track_failsafe_reset();
+            kk_head_track_poll(&g_profile, s_ble_on, true, now);
             s_ppm_on = true;
             ESP_LOGW(TAG, "PPM on");
             schedule_wifi_after_stable(now);
@@ -322,14 +336,16 @@ void app_main(void)
         }
 
         kk_tel_poll_rx_voltage();
-        kk_head_track_apply(&g_profile);
+        kk_ble_rx_poll();
+        kk_head_track_poll(&g_profile, s_ble_on, s_ppm_on, now);
         led_update();
 
         if (kk_diag_due(&s_hb_ms, KK_DIAG_LOG_MS)) {
             if (s_ppm_on && s_ble_on && g_kk_tel.last_pkt_ms > 0) {
-                ESP_LOGW(TAG, "[RX] yaw=%d pitch=%d lr=%u ud=%u ble=%d wifi=%d",
+                ESP_LOGW(TAG, "[RX] yaw=%d pitch=%d lr=%u ud=%u ble=%d fs=%d wifi=%d",
                          (int)g_kk_ht.yaw_f, (int)g_kk_ht.pitch_f, g_kk_ht.ppm_lr,
-                         g_kk_ht.ppm_ud, s_ble_on, kk_wifi_rx_is_on());
+                         g_kk_ht.ppm_ud, s_ble_on, kk_head_track_failsafe_active(),
+                         kk_wifi_rx_is_on());
             } else {
                 ESP_LOGW(TAG, "[RX] btn=%d ble=%d ppm=%d wifi=%d",
                          gpio_get_level(PIN_BTN), s_ble_on, s_ppm_on, kk_wifi_rx_is_on());

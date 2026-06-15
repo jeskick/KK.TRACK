@@ -151,7 +151,7 @@ static void poll_imu(void)
     if (!kk_imu_tx_poll()) {
         return;
     }
-    if (kk_imu_tx_has_pose()) {
+    if (kk_imu_tx_has_pose() && !kk_imu_tx_is_motion_paused()) {
         kk_gesture_center_poll(kk_imu_tx_roll_deg(), kk_millis());
     }
 }
@@ -169,8 +169,9 @@ static void tel_poll_imu(void)
     s_next_tel_ms = now + KK_BLE_TEL_MS;
 
     char payload[48];
-    if (kk_tel_format_pose(payload, sizeof(payload), kk_imu_tx_yaw_deg(),
-                           kk_imu_tx_pitch_deg())) {
+    const float yaw = kk_imu_tx_yaw_deg();
+    const float pitch = kk_imu_tx_pitch_deg();
+    if (kk_tel_format_pose(payload, sizeof(payload), yaw, pitch)) {
         kk_ble_tx_send_telemetry(payload);
     }
 }
@@ -178,6 +179,23 @@ static void tel_poll_imu(void)
 static void imu_log_throttled(void)
 {
     if (!kk_imu_tx_has_pose() || !kk_diag_due(&s_imu_log_ms, KK_DIAG_LOG_MS)) {
+        return;
+    }
+    if (kk_imu_tx_motion_enabled()) {
+        if (!kk_imu_tx_has_pose()) {
+            ESP_LOGW(TAG, "[IMU] FAULT waiting recover");
+            return;
+        }
+        ESP_LOGW(TAG, "[IMU] Y=%d P=%d R=%d mob lin=%.1f stab=%d trig=%lu%s",
+                 (int)kk_imu_tx_yaw_deg(), (int)kk_imu_tx_pitch_deg(),
+                 (int)kk_imu_tx_roll_deg(), kk_imu_tx_motion_lin_mps2(),
+                 (int)kk_imu_tx_motion_stability(),
+                 (unsigned long)kk_imu_tx_motion_trigger_ms(),
+                 kk_imu_tx_is_motion_paused() ? " HOLD" : "");
+        return;
+    }
+    if (!kk_imu_tx_has_pose()) {
+        ESP_LOGW(TAG, "[IMU] FAULT waiting recover");
         return;
     }
     ESP_LOGW(TAG, "[IMU] Y=%d P=%d R=%d",
@@ -199,6 +217,7 @@ static void app_run_ble(void)
 
     while (1) {
         poll_btn();
+        kk_ble_tx_poll();
         poll_imu();
         tel_poll_imu();
         imu_log_throttled();

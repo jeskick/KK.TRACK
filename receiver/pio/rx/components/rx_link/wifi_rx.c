@@ -255,7 +255,6 @@ void kk_wifi_rx_udp_poll(void)
     }
     buf[n] = '\0';
     kk_tel_on_udp_payload(buf);
-    kk_head_track_apply(&g_profile);
 
     const char ack[] = "ACK";
     sendto(s_udp_sock, ack, sizeof(ack) - 1, 0, (struct sockaddr *)&src, slen);

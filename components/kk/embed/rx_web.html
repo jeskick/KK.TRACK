@@ -11,8 +11,11 @@ h1{font-size:1.1rem;margin-bottom:10px;color:#8ec8ff}
 h2{font-size:.88rem;margin:0 0 8px;color:#9aa7b8;font-weight:600}
 .card{background:#1a2332;border-radius:10px;padding:10px;margin-bottom:8px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}
-.item label{display:block;font-size:.7rem;color:#8b98a8}
-.item .val{font-size:.95rem;font-weight:600}
+.status-rows{display:flex;flex-direction:column;gap:10px}
+.status-line{display:flex;justify-content:space-between;gap:10px}
+.status-line .st{display:flex;align-items:baseline;gap:5px;flex:1;min-width:0}
+.status-line label{font-size:.78rem;color:#8b98a8;white-space:nowrap}
+.status-line .val{font-size:.88rem;font-weight:600;white-space:nowrap}
 .line{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px}
 .line>label{color:#b8c5d6;white-space:nowrap;font-size:.82rem}
 .slider-row{display:flex;align-items:center;gap:6px;margin-bottom:8px}
@@ -41,9 +44,15 @@ h2{font-size:.88rem;margin:0 0 8px;color:#9aa7b8;font-weight:600}
 <body>
 <h1>KK-TRACK CONFIG.RX</h1>
 <div class="card">
-<div class="grid2">
-<div class="item"><label>左右 µs</label><div class="val" id="plr">--</div></div>
-<div class="item"><label>上下 µs</label><div class="val" id="pud">--</div></div>
+<div class="status-rows">
+<div class="status-line">
+<span class="st"><label>左右 µs</label><span class="val" id="plr">--</span></span>
+<span class="st"><label>上下 µs</label><span class="val" id="pud">--</span></span>
+</div>
+<div class="status-line">
+<span class="st"><label>解耦抑制%</label><span class="val" id="v_str">--</span></span>
+<span class="st"><label>检测阈值%</label><span class="val" id="v_dom">--</span></span>
+</div>
 </div>
 </div>
 <div class="card">
@@ -98,6 +107,21 @@ h2{font-size:.88rem;margin:0 0 8px;color:#9aa7b8;font-weight:600}
 </div>
 </div>
 <p class="hint">TX 左右各摆到设定角度后回正稳定即自动回中；超时内未完成左右摆动则取消。保存后同步到 TX。</p>
+<div class="line">
+<label class="chk"><input type="checkbox" id="track_dec" checked>轴解耦</label>
+<label class="chk"><input type="checkbox" id="track_mob" checked>移动检测</label>
+</div>
+<div class="slider-row">
+<label class="slider-lbl">解耦抑制%</label>
+<input type="range" id="dec_str_s" min="10" max="95" step="1" value="85">
+<input class="in-num" type="number" id="dec_str" min="10" max="95" step="1" value="85">
+</div>
+<div class="slider-row">
+<label class="slider-lbl">检测阈值%</label>
+<input type="range" id="dec_dom_s" min="35" max="65" step="1" value="45">
+<input class="in-num" type="number" id="dec_dom" min="35" max="65" step="1" value="45">
+</div>
+<p class="hint">解耦抑制：次轴最多削弱比例（越大越强，建议 70–90）。检测阈值：陀螺占比超过此值才抑制（越小越早介入）。移动检测：走路/大动作时输出回 0°（RX 按偏移换算个体中位 PPM）并保持，静止约 1.5s 后 IMU 置零并恢复跟踪。保存后 TRK 同步 TX。</p>
 <div class="btns">
 <button type="button" class="btn btn-reset" id="btnReset">重置参数</button>
 </div>
@@ -164,6 +188,14 @@ function loadCfg(d){
   fillRot($('mount_fb'),d.mount_fb||0);
   fillGestRoll($('gest_roll'),d.gest_roll_deg||20);
   $('gest_ms').value=d.gest_swing_ms||1500;$('gest_ms_s').value=d.gest_swing_ms||1500;
+  $('track_dec').checked=!!d.track_decouple_en;
+  $('track_mob').checked=!!d.track_motion_en;
+  const str=(d.track_decouple_str_x100!=null)?d.track_decouple_str_x100:85;
+  const dom=(d.track_decouple_dom_x10!=null)?d.track_decouple_dom_x10:45;
+  $('dec_str').value=str;$('dec_str_s').value=str;
+  $('dec_dom').value=dom;$('dec_dom_s').value=dom;
+  $('v_str').textContent=str;
+  $('v_dom').textContent=dom;
   loading=false;
 }
 function fixCh(){
@@ -180,11 +212,17 @@ $('mount_horiz').onchange=scheduleSave;
 $('mount_lr').onchange=scheduleSave;
 $('mount_fb').onchange=scheduleSave;
 $('gest_roll').onchange=scheduleSave;
-bindPair($('off_lr_s'),$('off_lr'));
-bindPair($('off_ud_s'),$('off_ud'));
-bindPair($('scale_s'),$('scale'));
-bindPair($('jit_s'),$('jit'));
-bindPair($('gest_ms_s'),$('gest_ms'));
+$('track_dec').onchange=scheduleSave;
+$('track_mob').onchange=scheduleSave;
+function bindSliders(){
+  bindPair($('dec_str_s'),$('dec_str'));
+  bindPair($('dec_dom_s'),$('dec_dom'));
+  bindPair($('off_lr_s'),$('off_lr'));
+  bindPair($('off_ud_s'),$('off_ud'));
+  bindPair($('scale_s'),$('scale'));
+  bindPair($('jit_s'),$('jit'));
+  bindPair($('gest_ms_s'),$('gest_ms'));
+}
 async function doSave(){
   if(loading)return;
   if($('ch_lr').value==$('ch_ud').value){$('msg').textContent='通道冲突';return;}
@@ -203,6 +241,10 @@ async function doSave(){
   p.set('mount_fb',$('mount_fb').value);
   p.set('gest_roll_deg',$('gest_roll').value);
   p.set('gest_swing_ms',$('gest_ms').value);
+  p.set('track_decouple_en',$('track_dec').checked?1:0);
+  p.set('track_motion_en',$('track_mob').checked?1:0);
+  p.set('track_decouple_str_x100',$('dec_str').value);
+  p.set('track_decouple_dom_x10',$('dec_dom').value);
   try{
     const r=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p.toString()});
     const j=await r.json();
@@ -220,6 +262,8 @@ async function poll(){
     const r=await fetch('/api/status');const j=await r.json();
     $('plr').textContent=j.ppm_lr+' µs (CH'+j.ch_lr+')';
     $('pud').textContent=j.ppm_ud+' µs (CH'+j.ch_ud+')';
+    if(j.track_decouple_str_x100!=null)$('v_str').textContent=j.track_decouple_str_x100;
+    if(j.track_decouple_dom_x10!=null)$('v_dom').textContent=j.track_decouple_dom_x10+'%';
   }catch(e){}
 }
 $('btnReset').onclick=async()=>{
@@ -230,8 +274,17 @@ $('btnReset').onclick=async()=>{
     if(j.ok&&j.cfg){loadCfg(j.cfg);$('msg').textContent='已重置';}
   }catch(e){$('msg').textContent='失败';}
 };
-fetch('/api/config').then(r=>r.json()).then(loadCfg);
-setInterval(poll,500);poll();
+async function boot(){
+  try{
+    const r=await fetch('/api/config');
+    const d=await r.json();
+    loadCfg(d);
+  }catch(e){}
+  bindSliders();
+  poll();
+  setInterval(poll,500);
+}
+boot();
 </script>
 </body>
 </html>

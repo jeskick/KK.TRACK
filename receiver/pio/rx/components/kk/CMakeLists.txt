@@ -4,6 +4,7 @@ idf_component_register(
         "src/led.c"
         "src/repair.c"
         "src/gesture_cfg.c"
+        "src/tx_track_cfg.c"
         "src/imu_mount.c"
         "src/storage.c"
         "src/rx_profile.c"

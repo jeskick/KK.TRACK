@@ -1,6 +1,7 @@
 #include "kk/rx_profile.h"
 #include "kk/imu_mount.h"
 #include "kk/link_config.h"
+#include "kk/tx_track_cfg.h"
 
 #include "nvs.h"
 #include <math.h>
@@ -10,11 +11,11 @@ kk_rx_profile_t kk_rx_profile_defaults(void)
     kk_rx_profile_t p = {
         .ch_lr = 6,
         .ch_ud = 5,
-        .offset_lr = 0,
+        .offset_lr = -280,
         .offset_ud = 0,
         .scale_lr = KK_RX_SCALE_NEUT,
         .jitter_x10 = 5,
-        .yaw_servo_deg = KK_RX_YAW_SERVO_180,
+        .yaw_servo_deg = KK_RX_YAW_SERVO_270,
         .rev_lr = false,
         .rev_ud = false,
         .mount_horiz = 0,
@@ -22,6 +23,10 @@ kk_rx_profile_t kk_rx_profile_defaults(void)
         .mount_fb = 0,
         .gest_roll_deg = KK_GEST_ROLL_DEG_DEFAULT,
         .gest_swing_ms = KK_GEST_SWING_MS_DEFAULT,
+        .track_decouple_en = true,
+        .track_motion_en = true,
+        .track_decouple_str_x100 = KK_TRACK_DEC_STR_DEFAULT,
+        .track_decouple_dom_x10 = KK_TRACK_DEC_DOM_DEFAULT,
     };
     return p;
 }
@@ -133,6 +138,17 @@ void kk_rx_profile_sanitize(kk_rx_profile_t *p)
     kk_gesture_cfg_sanitize(&g);
     p->gest_roll_deg = g.roll_deg;
     p->gest_swing_ms = g.swing_ms;
+    kk_tx_track_cfg_t t = {
+        .decouple_en = p->track_decouple_en,
+        .motion_en = p->track_motion_en,
+        .decouple_str_x100 = p->track_decouple_str_x100,
+        .decouple_dom_x10 = p->track_decouple_dom_x10,
+    };
+    kk_tx_track_cfg_sanitize(&t);
+    p->track_decouple_en = t.decouple_en;
+    p->track_motion_en = t.motion_en;
+    p->track_decouple_str_x100 = t.decouple_str_x100;
+    p->track_decouple_dom_x10 = t.decouple_dom_x10;
 }
 
 void kk_rx_profile_gesture_to_cfg(const kk_rx_profile_t *p, kk_gesture_cfg_t *out)
@@ -143,6 +159,18 @@ void kk_rx_profile_gesture_to_cfg(const kk_rx_profile_t *p, kk_gesture_cfg_t *ou
     out->roll_deg = p->gest_roll_deg;
     out->swing_ms = p->gest_swing_ms;
     kk_gesture_cfg_sanitize(out);
+}
+
+void kk_rx_profile_track_to_cfg(const kk_rx_profile_t *p, kk_tx_track_cfg_t *out)
+{
+    if (!p || !out) {
+        return;
+    }
+    out->decouple_en = p->track_decouple_en;
+    out->motion_en = p->track_motion_en;
+    out->decouple_str_x100 = p->track_decouple_str_x100;
+    out->decouple_dom_x10 = p->track_decouple_dom_x10;
+    kk_tx_track_cfg_sanitize(out);
 }
 
 void kk_rx_profile_mount_to_imu(const kk_rx_profile_t *p, kk_imu_mount_t *out)
@@ -168,6 +196,9 @@ void kk_rx_profile_mount_from_imu(kk_rx_profile_t *p, const kk_imu_mount_t *m)
 
 uint16_t kk_rx_yaw_angle_to_us(float deg, int16_t offset, uint16_t yaw_servo_deg, uint8_t scale_lr)
 {
+    if (!isfinite(deg)) {
+        deg = 0.0f;
+    }
     const kk_yaw_servo_t srv = kk_rx_yaw_servo_params(yaw_servo_deg);
     const float mult = kk_rx_scale_to_mult(scale_lr);
     float us = (float)srv.center_us + (float)offset + deg * mult * srv.us_per_deg;
@@ -182,6 +213,9 @@ uint16_t kk_rx_yaw_angle_to_us(float deg, int16_t offset, uint16_t yaw_servo_deg
 
 uint16_t kk_rx_angle_to_us(float deg, int16_t offset, bool use_lr_scale, uint8_t scale_lr)
 {
+    if (!isfinite(deg)) {
+        deg = 0.0f;
+    }
     float mult = use_lr_scale ? kk_rx_scale_to_mult(scale_lr) : 1.0f;
     float us = (float)KK_RX_PPM_CENTER + (float)offset + deg * mult * KK_RX_US_PER_DEG;
     if (us < (float)KK_RX_PPM_MIN) {
@@ -250,6 +284,18 @@ void kk_rx_profile_load(kk_rx_profile_t *out)
     if (nvs_get_u16(h, "g_ms", &v16u2) == ESP_OK) {
         out->gest_swing_ms = v16u2;
     }
+    if (nvs_get_u8(h, "trk_dec", &u8) == ESP_OK) {
+        out->track_decouple_en = u8 != 0;
+    }
+    if (nvs_get_u8(h, "trk_mob", &u8) == ESP_OK) {
+        out->track_motion_en = u8 != 0;
+    }
+    if (nvs_get_u8(h, "trk_str", &v8) == ESP_OK) {
+        out->track_decouple_str_x100 = v8;
+    }
+    if (nvs_get_u8(h, "trk_dom", &v8) == ESP_OK) {
+        out->track_decouple_dom_x10 = v8;
+    }
     nvs_close(h);
     kk_rx_profile_sanitize(out);
 }
@@ -279,6 +325,10 @@ void kk_rx_profile_save(const kk_rx_profile_t *cfg)
     nvs_set_u8(h, "m_fb", p.mount_fb);
     nvs_set_u8(h, "g_roll", p.gest_roll_deg);
     nvs_set_u16(h, "g_ms", p.gest_swing_ms);
+    nvs_set_u8(h, "trk_dec", p.track_decouple_en ? 1 : 0);
+    nvs_set_u8(h, "trk_mob", p.track_motion_en ? 1 : 0);
+    nvs_set_u8(h, "trk_str", p.track_decouple_str_x100);
+    nvs_set_u8(h, "trk_dom", p.track_decouple_dom_x10);
     nvs_commit(h);
     nvs_close(h);
 }

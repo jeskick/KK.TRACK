@@ -1,6 +1,7 @@
 #include "ble_rx.h"
 
 #include "kk/gesture_cfg.h"
+#include "kk/tx_track_cfg.h"
 #include "kk/imu_mount.h"
 #include "kk/link_config.h"
 #include "kk/repair.h"
@@ -9,6 +10,8 @@
 #include "kk/time.h"
 
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
@@ -32,6 +35,68 @@ static kk_ble_rx_event_cb_t s_on_repair_peer;
 static kk_ble_rx_event_cb_t s_on_center_peer;
 static kk_ble_rx_event_cb_t s_on_ready;
 static kk_ble_rx_event_cb_t s_on_telemetry;
+
+#define KK_BLE_RX_F_REPAIR      (1u << 0)
+#define KK_BLE_RX_F_CENTER      (1u << 1)
+#define KK_BLE_RX_F_CONNECT     (1u << 2)
+#define KK_BLE_RX_F_DISCONNECT  (1u << 3)
+#define KK_BLE_RX_F_SAVE_PEER   (1u << 4)
+#define KK_BLE_RX_F_ADV_RESTART (1u << 5)
+
+static portMUX_TYPE s_pending_mux = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint32_t s_pending_flags;
+static char s_pending_peer_mac[24];
+
+static void kk_ble_rx_flag(uint32_t bit)
+{
+    portENTER_CRITICAL(&s_pending_mux);
+    s_pending_flags |= bit;
+    portEXIT_CRITICAL(&s_pending_mux);
+}
+
+void kk_ble_rx_poll(void)
+{
+    uint32_t flags;
+    char peer[24];
+
+    portENTER_CRITICAL(&s_pending_mux);
+    flags = s_pending_flags;
+    s_pending_flags = 0;
+    strncpy(peer, s_pending_peer_mac, sizeof(peer) - 1);
+    peer[sizeof(peer) - 1] = '\0';
+    portEXIT_CRITICAL(&s_pending_mux);
+
+    if (flags & KK_BLE_RX_F_DISCONNECT) {
+        if (s_on_disconnect) {
+            s_on_disconnect();
+        }
+    }
+    if (flags & KK_BLE_RX_F_ADV_RESTART) {
+        kk_ble_rx_start_adv();
+    }
+    if (flags & KK_BLE_RX_F_CONNECT) {
+        if (s_on_connect) {
+            s_on_connect();
+        }
+    }
+    if (flags & KK_BLE_RX_F_SAVE_PEER) {
+        if (peer[0] != '\0') {
+            kk_storage_save_peer_mac(peer);
+            ESP_LOGW(TAG, "paired saved %s (deferred)", peer);
+        }
+    }
+    if (flags & KK_BLE_RX_F_REPAIR) {
+        if (s_on_repair_peer) {
+            s_on_repair_peer();
+        }
+    }
+    if (flags & KK_BLE_RX_F_CENTER) {
+        if (s_on_center_peer) {
+            s_on_center_peer();
+        }
+    }
+    (void)s_on_telemetry;
+}
 
 static bool kk_ble_rx_adv_visible(void)
 {
@@ -132,12 +197,12 @@ static int kk_ble_rx_gatt_access(uint16_t conn_handle, uint16_t attr_handle,
         }
         os_mbuf_copydata(ctxt->om, 0, len, buf);
         buf[len] = '\0';
-        if (kk_repair_cmd_match((const uint8_t *)buf, len) && s_on_repair_peer) {
-            s_on_repair_peer();
+        if (kk_repair_cmd_match((const uint8_t *)buf, len)) {
+            kk_ble_rx_flag(KK_BLE_RX_F_REPAIR);
             return 0;
         }
-        if (kk_center_cmd_match((const uint8_t *)buf, len) && s_on_center_peer) {
-            s_on_center_peer();
+        if (kk_center_cmd_match((const uint8_t *)buf, len)) {
+            kk_ble_rx_flag(KK_BLE_RX_F_CENTER);
             return 0;
         }
         if (len > 0) {
@@ -145,14 +210,14 @@ static int kk_ble_rx_gatt_access(uint16_t conn_handle, uint16_t attr_handle,
             if (!kk_storage_load_paired(stored, sizeof(stored))) {
                 char peer[24];
                 if (kk_ble_rx_peer_mac(conn_handle, peer, sizeof(peer))) {
-                    kk_storage_save_peer_mac(peer);
-                    ESP_LOGW(TAG, "paired saved %s", peer);
+                    portENTER_CRITICAL(&s_pending_mux);
+                    strncpy(s_pending_peer_mac, peer, sizeof(s_pending_peer_mac) - 1);
+                    s_pending_peer_mac[sizeof(s_pending_peer_mac) - 1] = '\0';
+                    s_pending_flags |= KK_BLE_RX_F_SAVE_PEER;
+                    portEXIT_CRITICAL(&s_pending_mux);
                 }
             }
             kk_tel_on_udp_payload(buf);
-            if (s_on_telemetry) {
-                s_on_telemetry();
-            }
         }
         return 0;
     }
@@ -210,15 +275,13 @@ static int kk_ble_rx_gap_event(struct ble_gap_event *event, void *arg)
             s_connected = true;
             ble_gap_adv_stop();
             if (!kk_ble_rx_accept_peer(event->connect.conn_handle)) {
-                kk_ble_rx_start_adv();
+                kk_ble_rx_flag(KK_BLE_RX_F_ADV_RESTART);
                 return 0;
             }
             ESP_LOGW(TAG, "connected");
-            if (s_on_connect) {
-                s_on_connect();
-            }
+            kk_ble_rx_flag(KK_BLE_RX_F_CONNECT);
         } else {
-            kk_ble_rx_start_adv();
+            kk_ble_rx_flag(KK_BLE_RX_F_ADV_RESTART);
         }
         return 0;
 
@@ -226,14 +289,12 @@ static int kk_ble_rx_gap_event(struct ble_gap_event *event, void *arg)
         s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
         s_connected = false;
         ESP_LOGI(TAG, "disconnected");
-        if (s_on_disconnect) {
-            s_on_disconnect();
-        }
-        kk_ble_rx_start_adv();
+        kk_ble_rx_flag(KK_BLE_RX_F_DISCONNECT);
+        kk_ble_rx_flag(KK_BLE_RX_F_ADV_RESTART);
         return 0;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
-        kk_ble_rx_start_adv();
+        kk_ble_rx_flag(KK_BLE_RX_F_ADV_RESTART);
         return 0;
 
     default:
@@ -312,6 +373,21 @@ void kk_ble_rx_send_gesture(const kk_gesture_cfg_t *cfg)
     }
     char buf[20];
     snprintf(buf, sizeof(buf), "GES,%u,%u", cfg->roll_deg, cfg->swing_ms);
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, strlen(buf));
+    if (om) {
+        ble_gatts_notify_custom(s_conn_handle, s_link_val_handle, om);
+        ESP_LOGW(TAG, "notify TX %s", buf);
+    }
+}
+
+void kk_ble_rx_send_track(const kk_tx_track_cfg_t *cfg)
+{
+    if (!cfg || s_conn_handle == BLE_HS_CONN_HANDLE_NONE || s_link_val_handle == 0) {
+        return;
+    }
+    char buf[24];
+    snprintf(buf, sizeof(buf), "TRK,%u,%u,%u,%u", cfg->decouple_en ? 1U : 0U, cfg->motion_en ? 1U : 0U,
+             cfg->decouple_str_x100, cfg->decouple_dom_x10);
     struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, strlen(buf));
     if (om) {
         ble_gatts_notify_custom(s_conn_handle, s_link_val_handle, om);

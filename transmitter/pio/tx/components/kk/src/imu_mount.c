@@ -176,6 +176,40 @@ void kk_imu_quat_to_sensor_rel(const kk_quat_t *q_rel, float sensor_rel[3])
     sensor_rel[2] = kk_imu_wrap_deg(yaw);
 }
 
+/* 从 q 中提取绕单位轴 (ax,ay,az) 的 twist 分量（swing-twist 分解） */
+static kk_quat_t kk_quat_twist_about(kk_quat_t q, float ax, float ay, float az)
+{
+    const float d = q.x * ax + q.y * ay + q.z * az;
+    kk_quat_t t = {q.w, ax * d, ay * d, az * d};
+    const float len = sqrtf(t.w * t.w + t.x * t.x + t.y * t.y + t.z * t.z);
+    if (len < 1e-8f) {
+        kk_quat_t id = {1.0f, 0.0f, 0.0f, 0.0f};
+        return id;
+    }
+    t.w /= len;
+    t.x /= len;
+    t.y /= len;
+    t.z /= len;
+    if (t.w < 0.0f) {
+        t.w = -t.w;
+        t.x = -t.x;
+        t.y = -t.y;
+        t.z = -t.z;
+    }
+    return t;
+}
+
+static float kk_quat_twist_deg(kk_quat_t twist, float ax, float ay, float az)
+{
+    const float s = sqrtf(twist.x * twist.x + twist.y * twist.y + twist.z * twist.z);
+    float ang = 2.0f * atan2f(s, twist.w) * KK_RAD2DEG;
+    const float dot = twist.x * ax + twist.y * ay + twist.z * az;
+    if (dot < 0.0f) {
+        ang = -ang;
+    }
+    return kk_imu_wrap_deg(ang);
+}
+
 void kk_imu_mount_apply_quat(const kk_quat_t *q_now, const kk_quat_t *q_zero,
                              const kk_imu_mount_t *mount, float *yaw_deg,
                              float *pitch_deg, float *roll_deg)
@@ -189,19 +223,63 @@ void kk_imu_mount_apply_quat(const kk_quat_t *q_now, const kk_quat_t *q_zero,
     const kk_quat_t q_inv = kk_quat_conj(q_mount);
     kk_quat_t q_logic = kk_quat_mul(kk_quat_mul(q_inv, q_rel), q_mount);
 
-    float roll_x = 0.0f;
-    float pitch_y = 0.0f;
-    float yaw_z = 0.0f;
-    kk_imu_euler_from_quat(q_logic, &roll_x, &pitch_y, &yaw_z);
+    /* Z→Yaw、X→Pitch、Y→Roll；按轴顺序分解，避免欧拉角 yaw 泄漏到 pitch */
+    const kk_quat_t q_yaw_tw = kk_quat_twist_about(q_logic, 0.0f, 0.0f, 1.0f);
+    const float yaw = kk_quat_twist_deg(q_yaw_tw, 0.0f, 0.0f, 1.0f);
+    kk_quat_t q_rem = kk_quat_mul(kk_quat_conj(q_yaw_tw), q_logic);
+
+    const kk_quat_t q_pitch_tw = kk_quat_twist_about(q_rem, 1.0f, 0.0f, 0.0f);
+    const float pitch = kk_quat_twist_deg(q_pitch_tw, 1.0f, 0.0f, 0.0f);
+    q_rem = kk_quat_mul(kk_quat_conj(q_pitch_tw), q_rem);
+
+    const kk_quat_t q_roll_tw = kk_quat_twist_about(q_rem, 0.0f, 1.0f, 0.0f);
+    const float roll = kk_quat_twist_deg(q_roll_tw, 0.0f, 1.0f, 0.0f);
 
     if (yaw_deg) {
-        *yaw_deg = kk_imu_wrap_deg(yaw_z);
+        *yaw_deg = yaw;
     }
     if (pitch_deg) {
-        *pitch_deg = kk_imu_wrap_deg(roll_x);
+        *pitch_deg = pitch;
     }
     if (roll_deg) {
-        *roll_deg = kk_imu_wrap_deg(pitch_y);
+        *roll_deg = roll;
+    }
+}
+
+static void kk_quat_rotate_vec(kk_quat_t q, float vx, float vy, float vz, float *ox,
+                               float *oy, float *oz)
+{
+    const float tx = 2.0f * (q.y * vz - q.z * vy);
+    const float ty = 2.0f * (q.z * vx - q.x * vz);
+    const float tz = 2.0f * (q.x * vy - q.y * vx);
+    if (ox) {
+        *ox = vx + q.w * tx + (q.y * tz - q.z * ty);
+    }
+    if (oy) {
+        *oy = vy + q.w * ty + (q.z * tx - q.x * tz);
+    }
+    if (oz) {
+        *oz = vz + q.w * tz + (q.x * ty - q.y * tx);
+    }
+}
+
+void kk_imu_mount_gyro_to_logic(const kk_imu_mount_t *mount, float gx_dps,
+                                float gy_dps, float gz_dps, float *pitch_dps,
+                                float *yaw_dps, float *roll_dps)
+{
+    const kk_quat_t q = kk_imu_mount_quat(mount);
+    float lx = 0.0f;
+    float ly = 0.0f;
+    float lz = 0.0f;
+    kk_quat_rotate_vec(q, gx_dps, gy_dps, gz_dps, &lx, &ly, &lz);
+    if (pitch_dps) {
+        *pitch_dps = lx;
+    }
+    if (yaw_dps) {
+        *yaw_dps = lz;
+    }
+    if (roll_dps) {
+        *roll_dps = ly;
     }
 }
 
