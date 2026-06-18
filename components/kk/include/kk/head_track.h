@@ -14,6 +14,7 @@ typedef struct {
 extern kk_head_track_t g_kk_ht;
 
 void kk_head_track_reset(void);
+void kk_head_track_snap_telemetry(void);
 void kk_head_track_center(const kk_rx_profile_t *cfg);
 void kk_head_track_offset_center(const kk_rx_profile_t *cfg);
 void kk_head_track_apply(const kk_rx_profile_t *cfg);

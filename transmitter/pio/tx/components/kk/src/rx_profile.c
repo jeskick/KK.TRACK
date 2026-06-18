@@ -14,7 +14,7 @@ kk_rx_profile_t kk_rx_profile_defaults(void)
         .offset_lr = -280,
         .offset_ud = 0,
         .scale_lr = KK_RX_SCALE_NEUT,
-        .jitter_x10 = 5,
+        .scale_ud = KK_RX_SCALE_NEUT,
         .yaw_servo_deg = KK_RX_YAW_SERVO_270,
         .rev_lr = false,
         .rev_ud = false,
@@ -23,8 +23,9 @@ kk_rx_profile_t kk_rx_profile_defaults(void)
         .mount_fb = 0,
         .gest_roll_deg = KK_GEST_ROLL_DEG_DEFAULT,
         .gest_swing_ms = KK_GEST_SWING_MS_DEFAULT,
+        .gest_center_en = true,
         .track_decouple_en = true,
-        .track_motion_en = true,
+        .track_motion_en = false,
         .track_decouple_str_x100 = KK_TRACK_DEC_STR_DEFAULT,
         .track_decouple_dom_x10 = KK_TRACK_DEC_DOM_DEFAULT,
     };
@@ -47,11 +48,21 @@ float kk_rx_scale_to_mult(uint8_t scale)
     if (scale == 0) {
         scale = 1;
     }
-    if (scale >= KK_RX_SCALE_NEUT) {
-        return 1.0f + (float)(scale - KK_RX_SCALE_NEUT) / 10.0f;
+    /* 1→50% … 50→100% … 100→150% */
+    return KK_RX_SCALE_MIN_MULT + (float)scale / 100.0f;
+}
+
+static void kk_rx_clamp_scale(uint8_t *scale)
+{
+    if (!scale) {
+        return;
     }
-    float m = 1.0f - (float)(KK_RX_SCALE_NEUT - scale) / 10.0f;
-    return m < 0.1f ? 0.1f : m;
+    if (*scale < 1) {
+        *scale = 1;
+    }
+    if (*scale > 100) {
+        *scale = 100;
+    }
 }
 
 int16_t kk_rx_clamp_offset(int16_t v)
@@ -88,15 +99,15 @@ kk_yaw_servo_t kk_rx_yaw_servo_params(uint16_t yaw_servo_deg)
             .center_us = KK_RX_PPM_CENTER,
             .min_us = 500,
             .max_us = 2500,
-            .us_per_deg = 1000.0f / 135.0f,
+            .us_per_deg = 1000.0f / 135.0f, /* 270° 专用，仅 LR 通道 */
         };
         return s;
     }
     const kk_yaw_servo_t s = {
         .center_us = KK_RX_PPM_CENTER,
-        .min_us = KK_RX_PPM_MIN,
-        .max_us = KK_RX_PPM_MAX,
-        .us_per_deg = 500.0f / 90.0f,
+        .min_us = KK_RX_STD_SERVO_MIN_US,
+        .max_us = KK_RX_STD_SERVO_MAX_US,
+        .us_per_deg = KK_RX_STD_SERVO_US_PER_DEG,
     };
     return s;
 }
@@ -118,15 +129,8 @@ void kk_rx_profile_sanitize(kk_rx_profile_t *p)
     }
     p->offset_lr = kk_rx_clamp_offset(p->offset_lr);
     p->offset_ud = kk_rx_clamp_offset(p->offset_ud);
-    if (p->scale_lr < 1) {
-        p->scale_lr = 1;
-    }
-    if (p->scale_lr > 100) {
-        p->scale_lr = 100;
-    }
-    if (p->jitter_x10 > 200) {
-        p->jitter_x10 = 200;
-    }
+    kk_rx_clamp_scale(&p->scale_lr);
+    kk_rx_clamp_scale(&p->scale_ud);
     p->yaw_servo_deg = kk_rx_sanitize_yaw_servo_deg(p->yaw_servo_deg);
     p->mount_horiz &= 3U;
     p->mount_lr &= 3U;
@@ -134,10 +138,12 @@ void kk_rx_profile_sanitize(kk_rx_profile_t *p)
     kk_gesture_cfg_t g = {
         .roll_deg = p->gest_roll_deg,
         .swing_ms = p->gest_swing_ms,
+        .center_en = p->gest_center_en,
     };
     kk_gesture_cfg_sanitize(&g);
     p->gest_roll_deg = g.roll_deg;
     p->gest_swing_ms = g.swing_ms;
+    p->gest_center_en = g.center_en;
     kk_tx_track_cfg_t t = {
         .decouple_en = p->track_decouple_en,
         .motion_en = p->track_motion_en,
@@ -158,6 +164,7 @@ void kk_rx_profile_gesture_to_cfg(const kk_rx_profile_t *p, kk_gesture_cfg_t *ou
     }
     out->roll_deg = p->gest_roll_deg;
     out->swing_ms = p->gest_swing_ms;
+    out->center_en = p->gest_center_en;
     kk_gesture_cfg_sanitize(out);
 }
 
@@ -194,6 +201,7 @@ void kk_rx_profile_mount_from_imu(kk_rx_profile_t *p, const kk_imu_mount_t *m)
     p->mount_fb = m->rot_fb;
 }
 
+/** YAW LR 通道：由网页 yaw_servo_deg(180/270) 决定脉宽映射 */
 uint16_t kk_rx_yaw_angle_to_us(float deg, int16_t offset, uint16_t yaw_servo_deg, uint8_t scale_lr)
 {
     if (!isfinite(deg)) {
@@ -211,18 +219,19 @@ uint16_t kk_rx_yaw_angle_to_us(float deg, int16_t offset, uint16_t yaw_servo_deg
     return (uint16_t)(us + 0.5f);
 }
 
-uint16_t kk_rx_angle_to_us(float deg, int16_t offset, bool use_lr_scale, uint8_t scale_lr)
+/** 俯仰 UD 等标准 180° 通道；不受 yaw_servo_deg 影响 */
+uint16_t kk_rx_angle_to_us(float deg, int16_t offset, uint8_t scale_ud)
 {
     if (!isfinite(deg)) {
         deg = 0.0f;
     }
-    float mult = use_lr_scale ? kk_rx_scale_to_mult(scale_lr) : 1.0f;
-    float us = (float)KK_RX_PPM_CENTER + (float)offset + deg * mult * KK_RX_US_PER_DEG;
-    if (us < (float)KK_RX_PPM_MIN) {
-        us = (float)KK_RX_PPM_MIN;
+    const float mult = kk_rx_scale_to_mult(scale_ud);
+    float us = (float)KK_RX_PPM_CENTER + (float)offset + deg * mult * KK_RX_STD_SERVO_US_PER_DEG;
+    if (us < (float)KK_RX_STD_SERVO_MIN_US) {
+        us = (float)KK_RX_STD_SERVO_MIN_US;
     }
-    if (us > (float)KK_RX_PPM_MAX) {
-        us = (float)KK_RX_PPM_MAX;
+    if (us > (float)KK_RX_STD_SERVO_MAX_US) {
+        us = (float)KK_RX_STD_SERVO_MAX_US;
     }
     return (uint16_t)(us + 0.5f);
 }
@@ -255,8 +264,10 @@ void kk_rx_profile_load(kk_rx_profile_t *out)
     if (nvs_get_u8(h, "scale", &v8) == ESP_OK) {
         out->scale_lr = v8;
     }
-    if (nvs_get_u8(h, "jitter", &v8) == ESP_OK) {
-        out->jitter_x10 = v8;
+    if (nvs_get_u8(h, "scale_ud", &v8) == ESP_OK) {
+        out->scale_ud = v8;
+    } else {
+        out->scale_ud = out->scale_lr;
     }
     uint16_t v16u;
     if (nvs_get_u16(h, "yaw_srv", &v16u) == ESP_OK) {
@@ -283,6 +294,9 @@ void kk_rx_profile_load(kk_rx_profile_t *out)
     uint16_t v16u2;
     if (nvs_get_u16(h, "g_ms", &v16u2) == ESP_OK) {
         out->gest_swing_ms = v16u2;
+    }
+    if (nvs_get_u8(h, "g_cent", &u8) == ESP_OK) {
+        out->gest_center_en = u8 != 0;
     }
     if (nvs_get_u8(h, "trk_dec", &u8) == ESP_OK) {
         out->track_decouple_en = u8 != 0;
@@ -316,7 +330,7 @@ void kk_rx_profile_save(const kk_rx_profile_t *cfg)
     nvs_set_i16(h, "off_lr", p.offset_lr);
     nvs_set_i16(h, "off_ud", p.offset_ud);
     nvs_set_u8(h, "scale", p.scale_lr);
-    nvs_set_u8(h, "jitter", p.jitter_x10);
+    nvs_set_u8(h, "scale_ud", p.scale_ud);
     nvs_set_u16(h, "yaw_srv", p.yaw_servo_deg);
     nvs_set_u8(h, "rev_lr", p.rev_lr ? 1 : 0);
     nvs_set_u8(h, "rev_ud", p.rev_ud ? 1 : 0);
@@ -325,6 +339,7 @@ void kk_rx_profile_save(const kk_rx_profile_t *cfg)
     nvs_set_u8(h, "m_fb", p.mount_fb);
     nvs_set_u8(h, "g_roll", p.gest_roll_deg);
     nvs_set_u16(h, "g_ms", p.gest_swing_ms);
+    nvs_set_u8(h, "g_cent", p.gest_center_en ? 1 : 0);
     nvs_set_u8(h, "trk_dec", p.track_decouple_en ? 1 : 0);
     nvs_set_u8(h, "trk_mob", p.track_motion_en ? 1 : 0);
     nvs_set_u8(h, "trk_str", p.track_decouple_str_x100);

@@ -12,6 +12,7 @@
 typedef struct {
     uint8_t roll_deg;
     uint16_t swing_ms;
+    bool center_en;
 } kk_gesture_cfg_t;
 
 kk_gesture_cfg_t kk_gesture_cfg_defaults(void);

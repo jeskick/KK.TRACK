@@ -26,7 +26,8 @@ void kk_tx_gesture_load(kk_gesture_cfg_t *out)
     if (out) {
         *out = cfg;
     }
-    ESP_LOGW(TAG, "gesture roll=%u swing_ms=%u", cfg.roll_deg, cfg.swing_ms);
+    ESP_LOGW(TAG, "gesture roll=%u swing_ms=%u center=%u", cfg.roll_deg, cfg.swing_ms,
+             cfg.center_en ? 1U : 0U);
 }
 
 void kk_tx_gesture_save(const kk_gesture_cfg_t *cfg)
@@ -46,7 +47,13 @@ void kk_tx_gesture_save(const kk_gesture_cfg_t *cfg)
     nvs_set_u16(h, "g_ms", c.swing_ms);
     nvs_commit(h);
     nvs_close(h);
-    ESP_LOGW(TAG, "gesture cfg roll=%u° swing=%ums", c.roll_deg, c.swing_ms);
+    ESP_LOGW(TAG, "gesture cfg roll=%u° swing=%ums center=%u", c.roll_deg, c.swing_ms,
+             c.center_en ? 1U : 0U);
+}
+
+bool kk_tx_gesture_center_enabled(void)
+{
+    return s_cfg.center_en;
 }
 
 void kk_tx_gesture_apply(const kk_gesture_cfg_t *cfg)

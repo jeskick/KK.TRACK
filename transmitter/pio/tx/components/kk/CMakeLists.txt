@@ -10,6 +10,7 @@ idf_component_register(
         "src/rx_profile.c"
         "src/telemetry.c"
         "src/ppm.c"
+        "src/servo_follow.c"
         "src/head_track.c"
         "src/rx_web.c"
         "src/rx_web_page.c"

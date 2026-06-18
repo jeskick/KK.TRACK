@@ -151,9 +151,19 @@ static void poll_imu(void)
     if (!kk_imu_tx_poll()) {
         return;
     }
-    if (kk_imu_tx_has_pose() && !kk_imu_tx_is_motion_paused()) {
-        kk_gesture_center_poll(kk_imu_tx_roll_deg(), kk_millis());
+    if (!kk_imu_tx_has_pose()) {
+        return;
     }
+
+    static uint32_t s_gest_ms;
+    const uint32_t now = kk_millis();
+    if (now < s_gest_ms) {
+        return;
+    }
+    s_gest_ms = now + KK_TX_GESTURE_POLL_MS;
+
+    kk_gesture_center_poll(kk_imu_tx_roll_deg(), kk_imu_tx_pitch_deg(), kk_imu_tx_yaw_deg(),
+                           kk_imu_tx_gyro_roll_dps(), kk_imu_tx_gyro_yaw_dps(), now);
 }
 
 static void tel_poll_imu(void)
@@ -181,15 +191,17 @@ static void imu_log_throttled(void)
     if (!kk_imu_tx_has_pose() || !kk_diag_due(&s_imu_log_ms, KK_DIAG_LOG_MS)) {
         return;
     }
+    const int y = (int)kk_imu_tx_yaw_deg();
+    const int p = (int)kk_imu_tx_pitch_deg();
+    const int r = (int)kk_imu_tx_roll_deg();
     if (kk_imu_tx_motion_enabled()) {
         if (!kk_imu_tx_has_pose()) {
             ESP_LOGW(TAG, "[IMU] FAULT waiting recover");
             return;
         }
-        ESP_LOGW(TAG, "[IMU] Y=%d P=%d R=%d mob lin=%.1f stab=%d trig=%lu%s",
-                 (int)kk_imu_tx_yaw_deg(), (int)kk_imu_tx_pitch_deg(),
-                 (int)kk_imu_tx_roll_deg(), kk_imu_tx_motion_lin_mps2(),
-                 (int)kk_imu_tx_motion_stability(),
+        ESP_LOGW(TAG,
+                 "[IMU] Y(Yaw偏航)=%d P(Pitch俯仰)=%d R(Roll横滚)=%d | mob lin=%.1f stab=%d trig=%lu%s",
+                 y, p, r, kk_imu_tx_motion_lin_mps2(), (int)kk_imu_tx_motion_stability(),
                  (unsigned long)kk_imu_tx_motion_trigger_ms(),
                  kk_imu_tx_is_motion_paused() ? " HOLD" : "");
         return;
@@ -198,9 +210,7 @@ static void imu_log_throttled(void)
         ESP_LOGW(TAG, "[IMU] FAULT waiting recover");
         return;
     }
-    ESP_LOGW(TAG, "[IMU] Y=%d P=%d R=%d",
-             (int)kk_imu_tx_yaw_deg(), (int)kk_imu_tx_pitch_deg(),
-             (int)kk_imu_tx_roll_deg());
+    ESP_LOGW(TAG, "[IMU] Y(Yaw偏航)=%d P(Pitch俯仰)=%d R(Roll横滚)=%d", y, p, r);
 }
 
 static void ble_init_task(void *arg)
@@ -219,6 +229,7 @@ static void app_run_ble(void)
         poll_btn();
         kk_ble_tx_poll();
         poll_imu();
+        kk_imu_tx_motion_poll();
         tel_poll_imu();
         imu_log_throttled();
 
@@ -272,17 +283,14 @@ static void repair_enter_local(bool notify_peer)
 
 static void app_run_imu_serial(void)
 {
-    printf("ms,yaw,pitch,roll\n");
+    printf("ms,Y(Yaw偏航),P(Pitch俯仰),R(Roll横滚)\n");
 
     while (1) {
         poll_btn();
 
         if (kk_imu_tx_poll()) {
-            printf("%lu,%.2f,%.2f,%.2f\n",
-                   (unsigned long)kk_millis(),
-                   kk_imu_tx_yaw_deg(),
-                   kk_imu_tx_pitch_deg(),
-                   kk_imu_tx_roll_deg());
+            printf("%lu,%d,%d,%d\n", (unsigned long)kk_millis(), (int)kk_imu_tx_yaw_deg(),
+                   (int)kk_imu_tx_pitch_deg(), (int)kk_imu_tx_roll_deg());
         }
 
         led_update();
@@ -326,6 +334,7 @@ static void app_init(void)
     s_paired = kk_storage_load_paired(s_rx_mac, sizeof(s_rx_mac));
     ESP_LOGW(TAG, "=== Track.KK.TX (ESP-IDF) ===");
     ESP_LOGW(TAG, "telemetry: IMU yaw/pitch @%lums", (unsigned long)KK_BLE_TEL_MS);
+    ESP_LOGW(TAG, "IMU轴 Y=偏航(左转+) P=俯仰(低头+) R=横滚(左下+)");
     ESP_LOGW(TAG, "btn: tap=center  hold 5s=repair  roll-swing=auto center");
     kk_ble_tx_set_on_disconnect(on_ble_lost);
     kk_ble_tx_set_on_repair_peer(on_repair_from_rx);

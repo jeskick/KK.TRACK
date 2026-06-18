@@ -1,6 +1,7 @@
 #include "imu_tx.h"
 #include "imu_decouple.h"
 #include "motion_detect.h"
+#include "gesture_center.h"
 #include "tx_mount.h"
 #include "tx_track.h"
 
@@ -40,6 +41,7 @@ static float s_gyro_pitch_dps;
 static float s_gyro_yaw_dps;
 static float s_gyro_roll_dps;
 static uint32_t s_last_pose_ms;
+static bool s_mob_lin_pending;
 static float s_pose_yaw;
 static float s_pose_pitch;
 static uint32_t s_last_motion_ms;
@@ -161,6 +163,12 @@ static void kk_imu_tx_refresh_lin_accel(void)
 
 static void kk_imu_tx_motion_step(uint32_t elapsed_ms)
 {
+    if (kk_gesture_center_is_active()) {
+        /* SETTLE 等待回正：仍跟 pose，勿冻结遥测 */
+        s_yaw_deg = s_pose_yaw;
+        s_pitch_deg = s_pose_pitch;
+        return;
+    }
     kk_motion_detect_apply(s_pose_yaw, s_pose_pitch, s_gyro_pitch_dps, s_gyro_yaw_dps,
                            s_gyro_roll_dps, s_stability, s_lin_accel_mps2, elapsed_ms,
                            &s_yaw_deg, &s_pitch_deg);
@@ -251,22 +259,26 @@ void kk_imu_tx_motion_sensors(bool enable)
     if (!s_inited) {
         s_stability_on = enable;
         s_lin_accel_on = enable;
+        s_mob_lin_pending = false;
         return;
     }
     if (enable) {
         if (!s_stability_on) {
             s_stability_on = true;
             BNO08x_enable_stability_classifier(&s_imu, KK_MOB_STABILITY_REPORT_US);
+            s_mob_lin_pending = true;
             ESP_LOGW(TAG, "stability classifier on");
+            return;
         }
-        vTaskDelay(pdMS_TO_TICKS(40));
-        if (!s_lin_accel_on) {
+        if (s_mob_lin_pending && !s_lin_accel_on) {
             s_lin_accel_on = true;
+            s_mob_lin_pending = false;
             BNO08x_enable_linear_accelerometer(&s_imu, KK_MOB_LIN_ACCEL_REPORT_US);
             ESP_LOGW(TAG, "linear accel on");
         }
         return;
     }
+    s_mob_lin_pending = false;
     if (s_stability_on) {
         s_stability_on = false;
         BNO08x_disable_stability_classifier(&s_imu);
@@ -280,6 +292,16 @@ void kk_imu_tx_motion_sensors(bool enable)
         s_lin_accel_mps2 = 0.0f;
         s_lin_count = 0;
         ESP_LOGW(TAG, "linear accel off");
+    }
+}
+
+void kk_imu_tx_motion_poll(void)
+{
+    if (!s_inited || !kk_motion_detect_is_enabled()) {
+        return;
+    }
+    if (s_mob_lin_pending && s_stability_on && !s_lin_accel_on) {
+        kk_imu_tx_motion_sensors(true);
     }
 }
 
@@ -401,6 +423,16 @@ float kk_imu_tx_yaw_deg(void)
     return s_yaw_deg;
 }
 
+float kk_imu_tx_gyro_roll_dps(void)
+{
+    return s_gyro_roll_dps;
+}
+
+float kk_imu_tx_gyro_yaw_dps(void)
+{
+    return s_gyro_yaw_dps;
+}
+
 float kk_imu_tx_sensor_deg(uint8_t axis)
 {
     if (axis > 2) {
@@ -418,6 +450,14 @@ void kk_imu_tx_rezero(void)
 
 void kk_imu_tx_set_mount(const kk_imu_mount_t *mount)
 {
+    if (!mount) {
+        return;
+    }
+    const kk_imu_mount_t *cur = kk_tx_mount_get();
+    if (cur && cur->rot_horiz == mount->rot_horiz && cur->rot_lr == mount->rot_lr &&
+        cur->rot_fb == mount->rot_fb) {
+        return;
+    }
     kk_tx_mount_apply(mount);
     if (s_has_pose) {
         kk_imu_mount_apply_quat(&s_last_quat, &s_zero_quat, kk_tx_mount_get(), &s_yaw_raw,
@@ -429,15 +469,24 @@ void kk_imu_tx_set_mount(const kk_imu_mount_t *mount)
 
 void kk_imu_tx_apply_track_cfg(const kk_tx_track_cfg_t *cfg)
 {
-    kk_tx_track_apply(cfg);
-    if (cfg) {
-        kk_motion_detect_set_enabled(cfg->motion_en);
-        kk_imu_tx_motion_sensors(cfg->motion_en);
+    if (!cfg) {
+        return;
+    }
+    const kk_tx_track_cfg_t *cur = kk_tx_track_get();
+    const bool same = cur && cur->decouple_en == cfg->decouple_en && cur->motion_en == cfg->motion_en &&
+                      cur->decouple_str_x100 == cfg->decouple_str_x100 &&
+                      cur->decouple_dom_x10 == cfg->decouple_dom_x10;
+    if (!same) {
+        kk_tx_track_apply(cfg);
+        if (s_has_pose) {
+            kk_imu_decouple_reset(&s_decouple, s_yaw_raw, s_pitch_raw);
+        }
+    }
+    kk_motion_detect_set_enabled(cfg->motion_en);
+    kk_imu_tx_motion_sensors(cfg->motion_en);
+    if (!same) {
         ESP_LOGW(TAG, "track mob=%u (sensors %s)", cfg->motion_en ? 1U : 0U,
                  cfg->motion_en ? "on" : "off");
-    } else {
-        kk_motion_detect_set_enabled(false);
-        kk_imu_tx_motion_sensors(false);
     }
 }
 

@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-import re
+import gzip
 import pathlib
+import re
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 html = (ROOT / "embed" / "rx_web.html").read_text(encoding="utf-8")
-data = html.encode("utf-8")
+html = re.sub(r">\s+<", "><", html.strip())
+raw = html.encode("utf-8")
+data = gzip.compress(raw, compresslevel=9)
 
 lines = [
     "#include <stddef.h>",
@@ -28,5 +31,4 @@ lines += [
     "extern const uint8_t kk_rx_web_page[];\nextern const size_t kk_rx_web_page_len;\n",
     encoding="utf-8",
 )
-(ROOT / "embed" / "rx_web.html").write_text(html, encoding="utf-8")
-print("bytes", len(data))
+print("html", len(raw), "gzip", len(data))

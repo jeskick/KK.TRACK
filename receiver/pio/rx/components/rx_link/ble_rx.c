@@ -42,6 +42,7 @@ static kk_ble_rx_event_cb_t s_on_telemetry;
 #define KK_BLE_RX_F_DISCONNECT  (1u << 3)
 #define KK_BLE_RX_F_SAVE_PEER   (1u << 4)
 #define KK_BLE_RX_F_ADV_RESTART (1u << 5)
+#define KK_BLE_RX_F_TEL         (1u << 6)
 
 static portMUX_TYPE s_pending_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint32_t s_pending_flags;
@@ -95,7 +96,11 @@ void kk_ble_rx_poll(void)
             s_on_center_peer();
         }
     }
-    (void)s_on_telemetry;
+    if (flags & KK_BLE_RX_F_TEL) {
+        if (s_on_telemetry) {
+            s_on_telemetry();
+        }
+    }
 }
 
 static bool kk_ble_rx_adv_visible(void)
@@ -218,6 +223,7 @@ static int kk_ble_rx_gatt_access(uint16_t conn_handle, uint16_t attr_handle,
                 }
             }
             kk_tel_on_udp_payload(buf);
+            kk_ble_rx_flag(KK_BLE_RX_F_TEL);
         }
         return 0;
     }
@@ -372,7 +378,8 @@ void kk_ble_rx_send_gesture(const kk_gesture_cfg_t *cfg)
         return;
     }
     char buf[20];
-    snprintf(buf, sizeof(buf), "GES,%u,%u", cfg->roll_deg, cfg->swing_ms);
+    snprintf(buf, sizeof(buf), "GES,%u,%u,%u", cfg->roll_deg, cfg->swing_ms,
+             cfg->center_en ? 1U : 0U);
     struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, strlen(buf));
     if (om) {
         ble_gatts_notify_custom(s_conn_handle, s_link_val_handle, om);

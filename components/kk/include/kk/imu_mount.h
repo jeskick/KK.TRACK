@@ -47,7 +47,8 @@ kk_quat_t kk_quat_from_bno(float i, float j, float k, float real);
 /** q_rel = conj(q_zero) * q_now */
 kk_quat_t kk_quat_rel(const kk_quat_t *q_now, const kk_quat_t *q_zero);
 
-/** q_zero 为归零时姿态；输出逻辑 yaw(Z)/pitch(X)/roll(Y) 度（swing-twist 按轴分解，减轻耦合） */
+/** q_zero 为归零时姿态；输出逻辑 yaw(Z)/pitch(X)/roll(Y) 度。
+ *  注意：欧拉函数 roll_x=绕X=Pitch，pitch_y=绕Y=Roll，勿与航空术语混淆。 */
 void kk_imu_mount_apply_quat(const kk_quat_t *q_now, const kk_quat_t *q_zero,
                              const kk_imu_mount_t *mount, float *yaw_deg,
                              float *pitch_deg, float *roll_deg);

@@ -23,6 +23,7 @@ static uint32_t s_last_http_ms;
 static kk_rx_web_mount_sync_cb_t s_mount_sync;
 static kk_rx_web_gesture_sync_cb_t s_gesture_sync;
 static kk_rx_web_track_sync_cb_t s_track_sync;
+static kk_rx_web_saved_cb_t s_on_saved;
 
 static void kk_rx_web_touch(void)
 {
@@ -42,13 +43,13 @@ static void kk_rx_web_json_config(char *buf, size_t cap)
     }
     snprintf(buf, cap,
              "{\"ch_lr\":%u,\"ch_ud\":%u,\"offset_lr\":%d,\"offset_ud\":%d,"
-             "\"scale_lr\":%u,\"jitter_x10\":%u,\"yaw_servo_deg\":%u,\"rev_lr\":%u,\"rev_ud\":%u,"
+             "\"scale_lr\":%u,\"scale_ud\":%u,\"yaw_servo_deg\":%u,\"rev_lr\":%u,\"rev_ud\":%u,"
              "\"mount_horiz\":%u,\"mount_lr\":%u,\"mount_fb\":%u,"
              "\"gest_roll_deg\":%u,\"gest_swing_ms\":%u,"
              "\"track_decouple_en\":%u,\"track_motion_en\":%u,"
              "\"track_decouple_str_x100\":%u,\"track_decouple_dom_x10\":%u}",
              s_profile->ch_lr, s_profile->ch_ud, s_profile->offset_lr, s_profile->offset_ud,
-             s_profile->scale_lr, s_profile->jitter_x10, s_profile->yaw_servo_deg,
+             s_profile->scale_lr, s_profile->scale_ud, s_profile->yaw_servo_deg,
              s_profile->rev_lr ? 1U : 0U, s_profile->rev_ud ? 1U : 0U,
              kk_imu_mount_steps_to_deg(s_profile->mount_horiz),
              kk_imu_mount_steps_to_deg(s_profile->mount_lr),
@@ -61,6 +62,8 @@ static void kk_rx_web_json_config(char *buf, size_t cap)
 static esp_err_t root_get(httpd_req_t *req)
 {
     kk_rx_web_touch();
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, (const char *)kk_rx_web_page, kk_rx_web_page_len);
 }
@@ -95,7 +98,7 @@ static esp_err_t status_get(httpd_req_t *req)
 static esp_err_t config_get(httpd_req_t *req)
 {
     kk_rx_web_touch();
-    char buf[480];
+    char buf[520];
     kk_rx_web_json_config(buf, sizeof(buf));
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
@@ -113,16 +116,44 @@ static int kk_web_arg_int(const char *body, const char *key, int def)
     return atoi(p);
 }
 
+static bool kk_web_read_body(httpd_req_t *req, char *body, size_t cap)
+{
+    if (!body || cap < 8) {
+        return false;
+    }
+
+    size_t got = 0;
+    const size_t want = req->content_len;
+
+    if (want > 0) {
+        while (got < want && got < cap - 1) {
+            const int n = httpd_req_recv(req, body + got, (cap - 1) - got);
+            if (n <= 0) {
+                ESP_LOGW(TAG, "[WEB] recv err want=%u got=%u", (unsigned)want, (unsigned)got);
+                return false;
+            }
+            got += (size_t)n;
+        }
+    } else {
+        const int n = httpd_req_recv(req, body, cap - 1);
+        if (n <= 0) {
+            return false;
+        }
+        got = (size_t)n;
+    }
+
+    body[got] = '\0';
+    return got > 0;
+}
+
 static esp_err_t save_post(httpd_req_t *req)
 {
     kk_rx_web_touch();
     char body[512];
-    int n = httpd_req_recv(req, body, sizeof(body) - 1);
-    if (n <= 0) {
-        ESP_LOGW(TAG, "[WEB] save recv fail");
+    if (!kk_web_read_body(req, body, sizeof(body))) {
+        ESP_LOGW(TAG, "[WEB] save recv fail len=%d", (int)req->content_len);
         return httpd_resp_send(req, "{\"ok\":false}", HTTPD_RESP_USE_STRLEN);
     }
-    body[n] = '\0';
 
     if (!s_profile) {
         return httpd_resp_send(req, "{\"ok\":false}", HTTPD_RESP_USE_STRLEN);
@@ -134,7 +165,7 @@ static esp_err_t save_post(httpd_req_t *req)
     p.offset_lr = (int16_t)kk_web_arg_int(body, "offset_lr", p.offset_lr);
     p.offset_ud = (int16_t)kk_web_arg_int(body, "offset_ud", p.offset_ud);
     p.scale_lr = (uint8_t)kk_web_arg_int(body, "scale_lr", p.scale_lr);
-    p.jitter_x10 = (uint8_t)kk_web_arg_int(body, "jitter_x10", p.jitter_x10);
+    p.scale_ud = (uint8_t)kk_web_arg_int(body, "scale_ud", p.scale_ud);
     p.yaw_servo_deg = (uint16_t)kk_rx_sanitize_yaw_servo_deg(
         (uint16_t)kk_web_arg_int(body, "yaw_servo_deg", (int)p.yaw_servo_deg));
     p.rev_lr = kk_web_arg_int(body, "rev_lr", 0) != 0;
@@ -144,6 +175,7 @@ static esp_err_t save_post(httpd_req_t *req)
     p.mount_fb = kk_imu_mount_deg_to_steps((uint16_t)kk_web_arg_int(body, "mount_fb", 0));
     p.gest_roll_deg = (uint8_t)kk_web_arg_int(body, "gest_roll_deg", (int)p.gest_roll_deg);
     p.gest_swing_ms = (uint16_t)kk_web_arg_int(body, "gest_swing_ms", (int)p.gest_swing_ms);
+    p.gest_center_en = true;
     p.track_decouple_en = kk_web_arg_int(body, "track_decouple_en", p.track_decouple_en ? 1 : 0) != 0;
     p.track_motion_en = kk_web_arg_int(body, "track_motion_en", p.track_motion_en ? 1 : 0) != 0;
     p.track_decouple_str_x100 =
@@ -153,6 +185,7 @@ static esp_err_t save_post(httpd_req_t *req)
     kk_rx_profile_sanitize(&p);
     *s_profile = p;
     kk_rx_profile_save(s_profile);
+    kk_head_track_snap_telemetry();
     kk_head_track_apply(s_profile);
     if (s_mount_sync) {
         kk_imu_mount_t m;
@@ -169,16 +202,19 @@ static esp_err_t save_post(httpd_req_t *req)
         kk_rx_profile_track_to_cfg(s_profile, &t);
         s_track_sync(&t);
     }
+    if (s_on_saved) {
+        s_on_saved();
+    }
 
-    ESP_LOGW(TAG, "[WEB] save ch_lr=%u ch_ud=%u yaw_srv=%u off_lr=%d off_ud=%d scale=%u jit=%u rev=%u/%u gest=%u/%u trk=%u/%u str=%u dom=%u",
+    ESP_LOGW(TAG, "[WEB] save ch_lr=%u ch_ud=%u yaw_srv=%u off_lr=%d off_ud=%d scale=%u/%u rev=%u/%u gest=%u/%u trk=%u/%u str=%u dom=%u",
              p.ch_lr, p.ch_ud, p.yaw_servo_deg, (int)p.offset_lr, (int)p.offset_ud,
-             p.scale_lr, p.jitter_x10, p.rev_lr ? 1U : 0U, p.rev_ud ? 1U : 0U,
+             p.scale_lr, p.scale_ud, p.rev_lr ? 1U : 0U, p.rev_ud ? 1U : 0U,
              p.gest_roll_deg, p.gest_swing_ms,
              p.track_decouple_en ? 1U : 0U, p.track_motion_en ? 1U : 0U,
              p.track_decouple_str_x100, p.track_decouple_dom_x10);
 
-    char cfg[420];
-    char out[480];
+    char cfg[480];
+    char out[520];
     kk_rx_web_json_config(cfg, sizeof(cfg));
     snprintf(out, sizeof(out), "{\"ok\":true,\"cfg\":%s}", cfg);
     httpd_resp_set_type(req, "application/json");
@@ -192,6 +228,7 @@ static esp_err_t reset_post(httpd_req_t *req)
         return httpd_resp_send(req, "{\"ok\":false}", HTTPD_RESP_USE_STRLEN);
     }
     kk_rx_profile_reset(s_profile);
+    kk_head_track_snap_telemetry();
     kk_head_track_apply(s_profile);
     if (s_mount_sync) {
         kk_imu_mount_t m;
@@ -208,9 +245,12 @@ static esp_err_t reset_post(httpd_req_t *req)
         kk_rx_profile_track_to_cfg(s_profile, &t);
         s_track_sync(&t);
     }
+    if (s_on_saved) {
+        s_on_saved();
+    }
     ESP_LOGW(TAG, "[WEB] reset defaults");
-    char cfg[360];
-    char out[480];
+    char cfg[480];
+    char out[520];
     kk_rx_web_json_config(cfg, sizeof(cfg));
     snprintf(out, sizeof(out), "{\"ok\":true,\"cfg\":%s}", cfg);
     httpd_resp_set_type(req, "application/json");
@@ -236,6 +276,8 @@ void kk_rx_web_begin(kk_rx_profile_t *profile)
     }
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.max_uri_handlers = 10;
+    cfg.recv_wait_timeout = 10;
+    cfg.lru_purge_enable = true;
     if (httpd_start(&s_server, &cfg) != ESP_OK) {
         s_server = NULL;
         return;
@@ -256,6 +298,11 @@ void kk_rx_web_begin(kk_rx_profile_t *profile)
 void kk_rx_web_set_track_sync(kk_rx_web_track_sync_cb_t cb)
 {
     s_track_sync = cb;
+}
+
+void kk_rx_web_set_on_saved(kk_rx_web_saved_cb_t cb)
+{
+    s_on_saved = cb;
 }
 
 void kk_rx_web_handle(void)

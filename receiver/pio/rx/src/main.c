@@ -37,6 +37,8 @@ static bool s_need_ppm;
 static bool s_need_link_down;
 static uint32_t s_hb_ms;
 static uint32_t s_ap_after_ms;
+static uint32_t s_tx_sync_next_ms;
+static uint8_t s_tx_sync_left;
 static bool s_wifi_scheduled;
 static bool s_wifi_was_on;
 
@@ -133,12 +135,11 @@ static void sync_track_to_tx(const kk_tx_track_cfg_t *cfg)
     }
 }
 
-static void on_ble_connect(void)
+static void sync_profile_to_tx(void)
 {
-    s_ble_on = true;
-    s_wifi_scheduled = false;
-    s_paired = kk_storage_load_paired(s_tx_mac, sizeof(s_tx_mac));
-    ESP_LOGW(TAG, "[BLE] link up peer %s", s_tx_mac);
+    if (!s_ble_on || !kk_ble_rx_is_connected()) {
+        return;
+    }
     kk_imu_mount_t m;
     kk_rx_profile_mount_to_imu(&g_profile, &m);
     sync_mount_to_tx(&m);
@@ -148,6 +149,24 @@ static void on_ble_connect(void)
     kk_tx_track_cfg_t t;
     kk_rx_profile_track_to_cfg(&g_profile, &t);
     sync_track_to_tx(&t);
+}
+
+static void on_web_profile_saved(void)
+{
+    s_tx_sync_left = 3;
+    s_tx_sync_next_ms = 0;
+}
+
+static void on_ble_connect(void)
+{
+    s_ble_on = true;
+    s_wifi_scheduled = false;
+    if (!s_ppm_on) {
+        s_need_ppm = true;
+    }
+    s_paired = kk_storage_load_paired(s_tx_mac, sizeof(s_tx_mac));
+    ESP_LOGW(TAG, "[BLE] link up peer %s", s_tx_mac);
+    sync_profile_to_tx();
 }
 
 static void on_ble_telemetry(void)
@@ -187,9 +206,9 @@ static void on_repair_from_tx(void)
 
 static void center_enter(bool notify_peer)
 {
-    ESP_LOGW(TAG, "[CENTER] PPM center");
+    ESP_LOGW(TAG, "[CENTER] offset center");
     if (s_ppm_on) {
-        kk_head_track_center(&g_profile);
+        kk_head_track_offset_center(&g_profile);
     } else {
         kk_head_track_reset();
     }
@@ -243,6 +262,7 @@ static void app_init(void)
     kk_rx_web_set_mount_sync(sync_mount_to_tx);
     kk_rx_web_set_gesture_sync(sync_gesture_to_tx);
     kk_rx_web_set_track_sync(sync_track_to_tx);
+    kk_rx_web_set_on_saved(on_web_profile_saved);
     kk_ble_rx_set_on_connect(on_ble_connect);
     kk_ble_rx_set_on_disconnect(on_ble_disconnect);
     kk_ble_rx_set_on_repair_peer(on_repair_from_tx);
@@ -316,6 +336,14 @@ void app_main(void)
             s_web_on = true;
             s_web_pending = false;
             ESP_LOGW(TAG, "web server on");
+        }
+
+        if (s_ble_on && s_tx_sync_left > 0) {
+            if (s_tx_sync_next_ms == 0 || now >= s_tx_sync_next_ms) {
+                sync_profile_to_tx();
+                s_tx_sync_left--;
+                s_tx_sync_next_ms = now + 1000;
+            }
         }
 
         kk_wifi_rx_idle_poll();

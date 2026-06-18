@@ -6,3 +6,4 @@ void kk_tx_gesture_load(kk_gesture_cfg_t *out);
 void kk_tx_gesture_save(const kk_gesture_cfg_t *cfg);
 void kk_tx_gesture_apply(const kk_gesture_cfg_t *cfg);
 const kk_gesture_cfg_t *kk_tx_gesture_get(void);
+bool kk_tx_gesture_center_enabled(void);

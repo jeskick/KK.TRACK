@@ -62,6 +62,19 @@ static bool kk_mob_head_only(float g_pitch, float g_yaw, float total_dps)
     return yaw_share >= KK_MOB_GYRO_HEAD_DOM_SHARE || pitch_share >= KK_MOB_GYRO_HEAD_DOM_SHARE;
 }
 
+static bool kk_mob_head_nod(float g_pitch, float g_yaw, float lin_metric)
+{
+    const float ap = fabsf(g_pitch);
+    const float az = fabsf(g_yaw);
+    if (ap < 22.0f) {
+        return false;
+    }
+    if (az > ap * 0.55f) {
+        return false;
+    }
+    return lin_metric < KK_MOB_LIN_ACCEL_MPS2 + 0.8f;
+}
+
 static bool kk_mob_body_motion(float g_pitch, float g_yaw, float g_roll, int8_t stability,
                                float lin_metric)
 {
@@ -69,6 +82,10 @@ static bool kk_mob_body_motion(float g_pitch, float g_yaw, float g_roll, int8_t 
     const float az = fabsf(g_yaw);
     const float ar = fabsf(g_roll);
     const float total = sqrtf(ax * ax + az * az + ar * ar);
+
+    if (kk_mob_head_nod(g_pitch, g_yaw, lin_metric)) {
+        return false;
+    }
 
     if (lin_metric >= KK_MOB_LIN_ACCEL_MPS2) {
         return true;

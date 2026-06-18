@@ -1,4 +1,5 @@
 #include "kk/imu_mount.h"
+#include "kk/link_config.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -176,7 +177,6 @@ void kk_imu_quat_to_sensor_rel(const kk_quat_t *q_rel, float sensor_rel[3])
     sensor_rel[2] = kk_imu_wrap_deg(yaw);
 }
 
-/* 从 q 中提取绕单位轴 (ax,ay,az) 的 twist 分量（swing-twist 分解） */
 static kk_quat_t kk_quat_twist_about(kk_quat_t q, float ax, float ay, float az)
 {
     const float d = q.x * ax + q.y * ay + q.z * az;
@@ -210,6 +210,17 @@ static float kk_quat_twist_deg(kk_quat_t twist, float ax, float ay, float az)
     return kk_imu_wrap_deg(ang);
 }
 
+static float kk_imu_clamp_pose_deg(float deg)
+{
+    if (deg > KK_IMU_POSE_CLAMP_DEG) {
+        return KK_IMU_POSE_CLAMP_DEG;
+    }
+    if (deg < -KK_IMU_POSE_CLAMP_DEG) {
+        return -KK_IMU_POSE_CLAMP_DEG;
+    }
+    return deg;
+}
+
 void kk_imu_mount_apply_quat(const kk_quat_t *q_now, const kk_quat_t *q_zero,
                              const kk_imu_mount_t *mount, float *yaw_deg,
                              float *pitch_deg, float *roll_deg)
@@ -223,26 +234,35 @@ void kk_imu_mount_apply_quat(const kk_quat_t *q_now, const kk_quat_t *q_zero,
     const kk_quat_t q_inv = kk_quat_conj(q_mount);
     kk_quat_t q_logic = kk_quat_mul(kk_quat_mul(q_inv, q_rel), q_mount);
 
-    /* Z→Yaw、X→Pitch、Y→Roll；按轴顺序分解，避免欧拉角 yaw 泄漏到 pitch */
-    const kk_quat_t q_yaw_tw = kk_quat_twist_about(q_logic, 0.0f, 0.0f, 1.0f);
-    const float yaw = kk_quat_twist_deg(q_yaw_tw, 0.0f, 0.0f, 1.0f);
-    kk_quat_t q_rem = kk_quat_mul(kk_quat_conj(q_yaw_tw), q_logic);
+    float rot_x = 0.0f;
+    float rot_y = 0.0f;
+    float rot_z = 0.0f;
+    kk_imu_euler_from_quat(q_logic, &rot_x, &rot_y, &rot_z);
 
-    const kk_quat_t q_pitch_tw = kk_quat_twist_about(q_rem, 1.0f, 0.0f, 0.0f);
-    const float pitch = kk_quat_twist_deg(q_pitch_tw, 1.0f, 0.0f, 0.0f);
-    q_rem = kk_quat_mul(kk_quat_conj(q_pitch_tw), q_rem);
+    float yaw = rot_z;
+    float pitch = rot_x;
+    float roll = rot_y;
 
-    const kk_quat_t q_roll_tw = kk_quat_twist_about(q_rem, 0.0f, 1.0f, 0.0f);
-    const float roll = kk_quat_twist_deg(q_roll_tw, 0.0f, 1.0f, 0.0f);
+    /* |Roll| 大时欧拉 Pitch/Yaw 奇异（日志 P=600+ Y 冻结）；改用 twist 并限幅 */
+    if (fabsf(roll) >= KK_IMU_GIMBAL_ROLL_DEG) {
+        const kk_quat_t q_yaw_tw = kk_quat_twist_about(q_logic, 0.0f, 0.0f, 1.0f);
+        const kk_quat_t q_pitch_tw = kk_quat_twist_about(q_logic, 1.0f, 0.0f, 0.0f);
+        yaw = kk_quat_twist_deg(q_yaw_tw, 0.0f, 0.0f, 1.0f);
+        pitch = kk_quat_twist_deg(q_pitch_tw, 1.0f, 0.0f, 0.0f);
+    }
+
+    yaw = kk_imu_clamp_pose_deg(yaw);
+    pitch = kk_imu_clamp_pose_deg(pitch);
+    roll = kk_imu_clamp_pose_deg(roll);
 
     if (yaw_deg) {
-        *yaw_deg = yaw;
+        *yaw_deg = kk_imu_wrap_deg(yaw);
     }
     if (pitch_deg) {
-        *pitch_deg = pitch;
+        *pitch_deg = kk_imu_wrap_deg(pitch);
     }
     if (roll_deg) {
-        *roll_deg = roll;
+        *roll_deg = kk_imu_wrap_deg(roll);
     }
 }
 

@@ -22,6 +22,7 @@ kk_gesture_cfg_t kk_gesture_cfg_defaults(void)
     const kk_gesture_cfg_t cfg = {
         .roll_deg = KK_GEST_ROLL_DEG_DEFAULT,
         .swing_ms = KK_GEST_SWING_MS_DEFAULT,
+        .center_en = true,
     };
     return cfg;
 }
@@ -51,12 +52,15 @@ bool kk_gesture_cmd_parse(const char *line, size_t len, kk_gesture_cfg_t *out)
 
     unsigned deg = 0;
     unsigned ms = 0;
-    if (sscanf(line, "GES,%u,%u", &deg, &ms) != 2) {
+    unsigned en = 0;
+    const int n = sscanf(line, "GES,%u,%u,%u", &deg, &ms, &en);
+    if (n < 2) {
         return false;
     }
 
     out->roll_deg = (uint8_t)deg;
     out->swing_ms = (uint16_t)ms;
+    out->center_en = (n >= 3) ? (en != 0) : true;
     kk_gesture_cfg_sanitize(out);
     return true;
 }

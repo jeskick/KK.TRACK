@@ -29,6 +29,21 @@
 #define KK_BLE_TEL_MS            20     /* TX→RX 遥测周期，与 PPM 50Hz 对齐 */
 #define KK_DIAG_LOG_MS           2000UL /* 状态日志周期；与遥测/PPM 解耦，不阻塞热路径 */
 
+/*
+ * 端到端信号链 — 各层职责分离，勿在错误层做限速：
+ *
+ *   L0 舵机物理：KK_SERVO_SEC_PER_60 → 最大角速度，是程序跟随的唯一速度上限
+ *   L1 TX 感知：BNO085 100Hz → 安装/零位 → 逻辑 yaw/pitch（几何，不含舵机速度）
+ *   L2 TX 语义：轴解耦(仅抑制耦合分量)、移动暂停、手势（语义，不改舵机响应曲线）
+ *   L3 链路：BLE 遥测 50Hz，传输目标角
+ *   L4 RX 跟随：servo_follow — 抖动死区 + 以 L0 为上限的斜率跟随（加减速自然柔和）
+ *   L5 RX 映射：角度→PPM 线性即时，无额外时间滤波
+ *   L6 PPM 50Hz(20ms) → 舵机
+ *
+ * 舵机典型满载 0.10–0.14 s/60°；取 0.12s 为设计值。
+ * 50Hz 时单帧最大转角 ≈ 60°/(0.12s×50Hz) ≈ 10°/帧。
+ */
+
 /* TX BNO085 GAME_ROTATION_VECTOR 报告间隔（us）；10000=100Hz */
 #define KK_TX_IMU_REPORT_US         10000UL
 /* 1=仅 IMU 串口调试，暂不启 BLE（避免 connect 日志打断） */
@@ -42,21 +57,32 @@
 #define KK_TX_GYRO_DECOUPLE_ROLL_RELAX  22.0f
 #define KK_TX_GYRO_DECOUPLE_DR_RELAX    2.5f
 #define KK_TX_GYRO_DECOUPLE_BOTH_GYRO   72.0f
-#define KK_DEC_SUP_ATTACK               0.42f   /* 解耦抑制爬升（每帧，100Hz） */
-#define KK_DEC_SUP_RELEASE              0.16f   /* 解耦抑制回落 */
-#define KK_DEC_MIN_GAIN                 0.18f   /* 次轴最低增益，避免完全锁死 */
-#define KK_DEC_DOM_SPAN                 0.22f   /* 检测阈值→满抑制跨度 */
+#define KK_DEC_SUP_ATTACK               0.28f   /* 抑制渐强：柔和，减轻干涩 */
+#define KK_DEC_SUP_RELEASE              0.22f   /* 抑制渐弱：主导轴恢复跟手 */
+#define KK_DEC_MIN_GAIN                 0.22f
+#define KK_DEC_YAW_MIN_GAIN_PITCH       0.05f   /* 俯仰主导时干扰 yaw 可近零 */
+#define KK_DEC_PITCH_DOM_GYRO_RATIO     1.15f
+#define KK_DEC_YAW_DOM_GYRO_RATIO       1.15f
+#define KK_DEC_COUPLING_YAW_SUP         0.92f   /* 点头时无 yaw 陀螺支撑的 yaw 增量 */
+#define KK_DEC_COUPLING_PITCH_SUP       0.42f   /* 转头时无 pitch 陀螺支撑（较轻） */
+#define KK_DEC_YAW_TO_PITCH_SCALE       0.38f   /* 偏航→俯仰抑制强度比例（弱侧） */
+#define KK_DEC_ROLL_PITCH_LEAK_DEG      12.0f   /* 中等 roll 下 pitch→yaw 泄漏补偿 */
+#define KK_DEC_ROLL_LEAK_MAX_DEG        48.0f   /* 超过则视为侧戴/奇异区，不再加强抑 yaw */
+#define KK_DEC_INTENT_GYRO_MIN          16.0f   /* 主观轴：陀螺超过此值且与 Δ角 同向 */
+#define KK_DEC_INTENT_GYRO_STRONG       26.0f   /* 强陀螺：无需 Δ角 对齐也视为真运动 */
+#define KK_DEC_INTENT_DEG_MIN           0.10f
+#define KK_DEC_DOM_SPAN                 0.22f
 
 /* TX 移动检测（走路/大动作 → hold + 静止自动置零） */
-#define KK_MOB_GYRO_HEAD_DOM_SHARE      0.60f
-#define KK_MOB_GYRO_BODY_AXIS_DPS       48.0f
-#define KK_MOB_GYRO_BODY_TOTAL_DPS      90.0f
-#define KK_MOB_GYRO_BODY_ROLL_DPS       28.0f
-#define KK_MOB_LIN_ACCEL_MPS2           2.5f
-#define KK_MOB_LIN_ACCEL_SOFT_MPS2      1.2f
-#define KK_MOB_LIN_EMA_NEW              0.32f   /* 线加速度低通 */
-#define KK_MOB_LIN_PEAK_DECAY           0.93f   /* 峰值衰减（步伐检测） */
-#define KK_MOB_TRIGGER_MS               350UL
+#define KK_MOB_GYRO_HEAD_DOM_SHARE      0.62f
+#define KK_MOB_GYRO_BODY_AXIS_DPS       52.0f
+#define KK_MOB_GYRO_BODY_TOTAL_DPS      95.0f
+#define KK_MOB_GYRO_BODY_ROLL_DPS       32.0f
+#define KK_MOB_LIN_ACCEL_MPS2           3.2f
+#define KK_MOB_LIN_ACCEL_SOFT_MPS2      1.4f
+#define KK_MOB_LIN_EMA_NEW              0.28f
+#define KK_MOB_LIN_PEAK_DECAY           0.92f
+#define KK_MOB_TRIGGER_MS               480UL
 #define KK_MOB_TRIGGER_DECAY_DIV        2U      /* 触发计时慢衰减，避免单帧漏检清零 */
 #define KK_MOB_SETTLE_MS                1500UL
 #define KK_MOB_SETTLE_DECAY_DIV         2U      /* 静止计时遇扰动慢减，不一次清零 */
@@ -79,9 +105,16 @@
 #define KK_BLE_CENTER_CMD        "CENTER"
 
 /* RX 失控保护：遥测丢失 / BLE 断连 → PPM 回 offset 个体中位并保持 */
-#define KK_RX_FS_TEL_LOST_MS     300UL   /* 无遥测超过此值进 failsafe */
-#define KK_RX_FS_RECOVER_MS      500UL   /* 恢复跟踪前需连续有效遥测 */
+#define KK_RX_FS_TEL_LOST_MS     5000UL  /* WiFi+BLE 共存；仅真正断链才 failsafe */
+#define KK_RX_FS_STALE_HOLD_MS   800UL   /* 短间隙保持上一帧，不回中 */
+#define KK_RX_FS_RECOVER_MS      300UL   /* 恢复跟踪前需连续有效遥测 */
 #define KK_RX_FS_RAMP_MS         220UL   /* 回中过渡，与移动检测一致 */
+
+/* L0 舵机物理规格（RX servo_follow 速度上限来源） */
+#define KK_SERVO_SEC_PER_60          0.12f
+#define KK_SERVO_MAX_DEG_PER_S       (60.0f / KK_SERVO_SEC_PER_60)
+#define KK_SERVO_JITTER_DEADBAND_DEG 0.15f
+#define KK_SERVO_FOLLOW_NOMINAL_DT_S (KK_BLE_TEL_MS / 1000.0f)
 
 /* TX：逻辑 Roll 左右快速摆动 → 回正稳定后自动回中（与物理短按相同） */
 /* 摆动角度/超时由 RX 网页配置，经 BLE GES 同步；见 gesture_cfg.h */
@@ -89,3 +122,10 @@
 #define KK_TX_ROLL_SETTLE_MS           700UL
 #define KK_TX_ROLL_SETTLE_TIMEOUT_MS   1500UL
 #define KK_TX_ROLL_GESTURE_COOLDOWN_MS 4000UL
+/* 手势回中：须 Roll 轴主导，避免 Pitch/Yaw 耦合误触发 */
+#define KK_TX_GESTURE_GYRO_ROLL_DPS    22.0f
+#define KK_TX_GESTURE_POLL_MS          20UL
+/* |Roll| 接近垂直：欧拉奇异 + 非手势姿态，中止手势并旁路解耦 */
+#define KK_IMU_GIMBAL_ROLL_DEG         55.0f
+#define KK_IMU_POSE_CLAMP_DEG          90.0f
+#define KK_TX_GESTURE_ROLL_ABORT_DEG   50.0f

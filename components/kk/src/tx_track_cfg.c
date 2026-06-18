@@ -7,7 +7,7 @@ kk_tx_track_cfg_t kk_tx_track_cfg_defaults(void)
 {
     const kk_tx_track_cfg_t cfg = {
         .decouple_en = true,
-        .motion_en = true,
+        .motion_en = false,
         .decouple_str_x100 = KK_TRACK_DEC_STR_DEFAULT,
         .decouple_dom_x10 = KK_TRACK_DEC_DOM_DEFAULT,
     };
