@@ -4,6 +4,7 @@
 #include "kk/head_track.h"
 #include "kk/link_config.h"
 #include "kk/rx_profile.h"
+#include "kk/rx_ota.h"
 #include "kk/rx_web.h"
 
 extern kk_rx_profile_t g_profile;
@@ -30,6 +31,9 @@ static bool s_had_sta;
 
 static void kk_wifi_rx_sta_check(void)
 {
+    if (kk_rx_ota_is_active()) {
+        return;
+    }
     wifi_sta_list_t sta;
     if (esp_wifi_ap_get_sta_list(&sta) != ESP_OK) {
         return;
@@ -108,6 +112,11 @@ bool kk_wifi_rx_ap_ready(void)
 
 void kk_wifi_rx_ap_stop(void)
 {
+    /* OTA 进行中不主动关 AP；非 OTA 才执行正常关 AP 逻辑 */
+    if (kk_rx_ota_is_active()) {
+        return;
+    }
+
     if (s_udp_sock >= 0) {
         close(s_udp_sock);
         s_udp_sock = -1;
@@ -190,6 +199,10 @@ void kk_wifi_rx_idle_poll(void)
 {
     if (!s_wifi_on) {
         return;
+    }
+
+    if (kk_rx_ota_is_active()) {
+        return; /* OTA 期间跳过所有关 AP 检查 */
     }
 
     if (!kk_ble_rx_is_connected()) {

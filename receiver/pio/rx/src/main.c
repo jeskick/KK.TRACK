@@ -8,6 +8,7 @@
 #include "kk/repair.h"
 #include "kk/ppm.h"
 #include "kk/rx_profile.h"
+#include "kk/rx_ota.h"
 #include "kk/tx_track_cfg.h"
 #include "kk/rx_web.h"
 #include "kk/storage.h"
@@ -17,11 +18,34 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_event.h"
+#include "esp_system.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 static const char *TAG = "KK.RX";
+
+static const char *reset_reason_str(void)
+{
+    switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:
+        return "POWERON";
+    case ESP_RST_SW:
+        return "SW";
+    case ESP_RST_PANIC:
+        return "PANIC";
+    case ESP_RST_INT_WDT:
+        return "INT_WDT";
+    case ESP_RST_TASK_WDT:
+        return "TASK_WDT";
+    case ESP_RST_WDT:
+        return "WDT";
+    case ESP_RST_BROWNOUT:
+        return "BROWNOUT";
+    default:
+        return "other";
+    }
+}
 
 kk_rx_profile_t g_profile;
 
@@ -78,6 +102,10 @@ static void led_update(void)
 
 static void repair_enter(bool notify_peer)
 {
+    if (kk_rx_ota_is_active()) {
+        ESP_LOGW(TAG, "[PAIR] ignored during OTA");
+        return;
+    }
     if (s_repair_busy) {
         return;
     }
@@ -157,6 +185,47 @@ static void on_web_profile_saved(void)
     s_tx_sync_next_ms = 0;
 }
 
+static void on_ota_prepare(void)
+{
+    if (s_ppm_on) {
+        kk_head_track_offset_center(&g_profile);
+    }
+}
+
+static esp_err_t ota_ble_tx_begin(size_t size)
+{
+    return kk_ble_rx_ota_tx_begin(size);
+}
+
+static esp_err_t ota_ble_tx_write(const uint8_t *data, size_t len)
+{
+    return kk_ble_rx_ota_tx_send(data, len);
+}
+
+static esp_err_t ota_ble_tx_finish(void)
+{
+    return kk_ble_rx_ota_tx_finish();
+}
+
+static void ota_ble_tx_abort(void)
+{
+    kk_ble_rx_ota_tx_cancel_wait();
+    kk_ble_rx_ota_tx_abort();
+}
+
+static bool ota_ble_tx_ready(void)
+{
+    return kk_ble_rx_ota_tx_ready();
+}
+
+static const kk_rx_ota_tx_ops_t s_ota_tx_ops = {
+    .ready = ota_ble_tx_ready,
+    .begin = ota_ble_tx_begin,
+    .write = ota_ble_tx_write,
+    .finish = ota_ble_tx_finish,
+    .abort = ota_ble_tx_abort,
+};
+
 static void on_ble_connect(void)
 {
     s_ble_on = true;
@@ -179,6 +248,13 @@ static void on_ble_telemetry(void)
 static void on_ble_disconnect(void)
 {
     s_ble_on = false;
+    if (kk_rx_ota_is_tx_relay()) {
+        ESP_LOGW(TAG, "[BLE] disconnected during TX OTA");
+        kk_ble_rx_ota_tx_cancel_wait();
+        kk_ble_rx_ota_tx_abort();
+        kk_rx_ota_tx_abort();
+        return;
+    }
     s_need_ap = false;
     s_wifi_scheduled = false;
     s_web_pending = false;
@@ -200,12 +276,20 @@ static void schedule_wifi_after_stable(uint32_t now)
 
 static void on_repair_from_tx(void)
 {
+    if (kk_rx_ota_is_active()) {
+        ESP_LOGW(TAG, "[PAIR] ignored during OTA");
+        return;
+    }
     ESP_LOGW(TAG, "[PAIR] REPAIR from TX");
     repair_enter(false); /* peer already notified; disconnect then clear */
 }
 
 static void center_enter(bool notify_peer)
 {
+    if (kk_rx_ota_is_active()) {
+        ESP_LOGW(TAG, "[CENTER] ignored during OTA");
+        return;
+    }
     ESP_LOGW(TAG, "[CENTER] offset center");
     if (s_ppm_on) {
         kk_head_track_offset_center(&g_profile);
@@ -250,6 +334,7 @@ static void app_init(void)
     s_tx_mac[0] = '\0';
     s_paired = kk_storage_load_paired(s_tx_mac, sizeof(s_tx_mac));
     ESP_LOGW(TAG, "=== Track.KK.RX (ESP-IDF) ===");
+    ESP_LOGW(TAG, "reset reason=%s", reset_reason_str());
     if (s_paired) {
         ESP_LOGW(TAG, "paired tx %s", s_tx_mac);
         ESP_LOGW(TAG, "ble name=%s adv=hidden", KK_BLE_NAME_RX);
@@ -259,10 +344,15 @@ static void app_init(void)
     }
 
     kk_wifi_rx_init();
+    kk_rx_ota_init();
+    kk_rx_ota_log_partitions();
+    kk_rx_ota_mark_boot_valid();
+    kk_rx_ota_set_tx_ops(&s_ota_tx_ops);
     kk_rx_web_set_mount_sync(sync_mount_to_tx);
     kk_rx_web_set_gesture_sync(sync_gesture_to_tx);
     kk_rx_web_set_track_sync(sync_track_to_tx);
     kk_rx_web_set_on_saved(on_web_profile_saved);
+    kk_rx_web_set_ota_prepare(on_ota_prepare);
     kk_ble_rx_set_on_connect(on_ble_connect);
     kk_ble_rx_set_on_disconnect(on_ble_disconnect);
     kk_ble_rx_set_on_repair_peer(on_repair_from_tx);
@@ -291,11 +381,13 @@ void app_main(void)
 
         if (s_need_link_down) {
             s_need_link_down = false;
-            if (s_web_on) {
-                kk_rx_web_stop();
-                s_web_on = false;
+            if (!kk_rx_ota_is_active()) {
+                if (s_web_on) {
+                    kk_rx_web_stop();
+                    s_web_on = false;
+                }
+                kk_wifi_rx_ap_stop();
             }
-            kk_wifi_rx_ap_stop();
         }
 
         if (s_need_ppm) {
@@ -338,7 +430,7 @@ void app_main(void)
             ESP_LOGW(TAG, "web server on");
         }
 
-        if (s_ble_on && s_tx_sync_left > 0) {
+        if (s_ble_on && s_tx_sync_left > 0 && !kk_rx_ota_is_active()) {
             if (s_tx_sync_next_ms == 0 || now >= s_tx_sync_next_ms) {
                 sync_profile_to_tx();
                 s_tx_sync_left--;
@@ -365,7 +457,9 @@ void app_main(void)
 
         kk_tel_poll_rx_voltage();
         kk_ble_rx_poll();
-        kk_head_track_poll(&g_profile, s_ble_on, s_ppm_on, now);
+        if (!kk_rx_ota_is_active()) {
+            kk_head_track_poll(&g_profile, s_ble_on, s_ppm_on, now);
+        }
         led_update();
 
         if (kk_diag_due(&s_hb_ms, KK_DIAG_LOG_MS)) {
@@ -380,6 +474,6 @@ void app_main(void)
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(20));
+        vTaskDelay(pdMS_TO_TICKS(kk_rx_ota_is_active() ? 2 : 20));
     }
 }

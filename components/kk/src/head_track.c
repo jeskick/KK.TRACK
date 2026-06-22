@@ -1,6 +1,7 @@
 #include "kk/head_track.h"
 #include "kk/link_config.h"
 #include "kk/ppm.h"
+#include "kk/rx_ota.h"
 #include "kk/servo_follow.h"
 #include "kk/telemetry.h"
 #include "kk/time.h"
@@ -252,6 +253,17 @@ void kk_head_track_poll(const kk_rx_profile_t *cfg, bool ble_connected, bool ppm
                         uint32_t now_ms)
 {
     if (!cfg || !ppm_active) {
+        return;
+    }
+
+    /* TX OTA 期间遥测稀疏，勿误判 link lost 刷屏/回中 */
+    if (kk_rx_ota_is_active()) {
+        const uint32_t pkt_age = ht_pkt_age_ms(now_ms);
+        if (g_kk_tel.last_pkt_ms > 0 && pkt_age < KK_RX_FS_STALE_HOLD_MS) {
+            kk_head_track_apply(cfg);
+        } else {
+            ht_hold_last_ppm(cfg);
+        }
         return;
     }
 

@@ -9,11 +9,13 @@ idf_component_register(
         "src/storage.c"
         "src/rx_profile.c"
         "src/telemetry.c"
+        "src/fw_version.c"
         "src/ppm.c"
         "src/servo_follow.c"
         "src/head_track.c"
+        "src/rx_ota.c"
         "src/rx_web.c"
         "src/rx_web_page.c"
     INCLUDE_DIRS "include"
-    REQUIRES driver esp_timer nvs_flash esp_http_server esp_wifi esp_netif esp_driver_gptimer esp_driver_ledc
+    REQUIRES driver esp_timer nvs_flash esp_http_server esp_wifi esp_netif esp_driver_gptimer esp_driver_ledc app_update
 )

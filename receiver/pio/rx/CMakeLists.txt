@@ -1,3 +1,3 @@
 cmake_minimum_required(VERSION 3.16.0)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(kk_rx)
+project(kk_rx VERSION "1.0.4")

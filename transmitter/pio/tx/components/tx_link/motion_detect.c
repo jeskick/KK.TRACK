@@ -1,4 +1,5 @@
 #include "motion_detect.h"
+#include "gesture_center.h"
 
 #include "kk/link_config.h"
 
@@ -237,14 +238,15 @@ void kk_motion_detect_apply(float in_yaw, float in_pitch, float gyro_pitch_dps,
     *out_yaw = in_yaw;
     *out_pitch = in_pitch;
 
-    if (kk_mob_body_motion(gyro_pitch_dps, gyro_yaw_dps, gyro_roll_dps, stability_class,
+    if (!kk_gesture_center_is_active() &&
+        kk_mob_body_motion(gyro_pitch_dps, gyro_yaw_dps, gyro_roll_dps, stability_class,
                            lin_metric)) {
         s_trigger_ms += elapsed_ms;
     } else {
         kk_mob_trigger_decay(elapsed_ms);
     }
 
-    if (s_trigger_ms >= KK_MOB_TRIGGER_MS) {
+    if (s_trigger_ms >= KK_MOB_TRIGGER_MS && !kk_gesture_center_is_active()) {
         s_ramp_from_yaw = in_yaw;
         s_ramp_from_pitch = in_pitch;
         s_ramp_ms = 0;

@@ -2,6 +2,7 @@
 #include "gesture_center.h"
 #include "imu_tx.h"
 #include "tx_gesture.h"
+#include "tx_ota.h"
 
 #include "kk/board_tx.h"
 #include "kk/led.h"
@@ -61,6 +62,10 @@ static void on_gesture_center(void)
 
 static void center_enter(bool notify_peer)
 {
+    if (kk_tx_ota_is_active()) {
+        ESP_LOGW(TAG, "[CENTER] ignored during OTA");
+        return;
+    }
     if (s_imu_ok) {
         kk_imu_tx_rezero();
     }
@@ -102,6 +107,10 @@ static void poll_btn(void)
 
 static void repair_enter_local(bool notify_peer)
 {
+    if (kk_tx_ota_is_active()) {
+        ESP_LOGW(TAG, "[PAIR] ignored during OTA");
+        return;
+    }
     if (s_repair_busy) {
         return;
     }
@@ -141,6 +150,10 @@ static void on_repair_from_rx(void)
 
 static void on_ble_lost(void)
 {
+    if (kk_tx_ota_is_active()) {
+        ESP_LOGW(TAG, "[BLE] lost during OTA -> abort");
+        kk_tx_ota_abort();
+    }
     s_ble_on = false;
     s_next_ble_ms = 0;
     ESP_LOGW(TAG, "[BLE] lost -> reconnect now");
@@ -148,6 +161,9 @@ static void on_ble_lost(void)
 
 static void poll_imu(void)
 {
+    if (kk_tx_ota_is_active()) {
+        return;
+    }
     if (!kk_imu_tx_poll()) {
         return;
     }
@@ -168,7 +184,7 @@ static void poll_imu(void)
 
 static void tel_poll_imu(void)
 {
-    if (!kk_ble_tx_is_link_ready() || !kk_imu_tx_has_pose()) {
+    if (kk_tx_ota_is_active() || !kk_ble_tx_is_link_ready() || !kk_imu_tx_has_pose()) {
         return;
     }
 
@@ -228,8 +244,11 @@ static void app_run_ble(void)
     while (1) {
         poll_btn();
         kk_ble_tx_poll();
+        kk_tx_ota_poll();
         poll_imu();
-        kk_imu_tx_motion_poll();
+        if (!kk_tx_ota_is_active()) {
+            kk_imu_tx_motion_poll();
+        }
         tel_poll_imu();
         imu_log_throttled();
 
@@ -256,7 +275,11 @@ static void app_run_ble(void)
         }
 
         led_update();
-        vTaskDelay(pdMS_TO_TICKS(2));
+        if (kk_tx_ota_is_active()) {
+            taskYIELD();
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(2));
+        }
     }
 }
 
@@ -304,6 +327,10 @@ static void app_init(void)
 {
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    kk_tx_ota_init();
+    kk_tx_ota_log_partitions();
+    kk_tx_ota_mark_boot_valid();
 
     kk_led_pins_init(PIN_LED_BLUE, PIN_LED_GREEN);
     kk_led_code_init(&s_led_code);

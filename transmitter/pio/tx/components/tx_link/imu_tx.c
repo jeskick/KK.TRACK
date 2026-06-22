@@ -59,6 +59,10 @@ static uint32_t s_next_recover_ms;
 
 static void kk_imu_tx_on_motion_rezero(void)
 {
+    if (kk_gesture_center_in_progress()) {
+        ESP_LOGW(TAG, "motion settled -> re-zero skipped (gesture)");
+        return;
+    }
     s_zero_set = false;
     kk_imu_decouple_reset(&s_decouple, 0.0f, 0.0f);
     s_yaw_deg = 0.0f;
@@ -164,7 +168,7 @@ static void kk_imu_tx_refresh_lin_accel(void)
 static void kk_imu_tx_motion_step(uint32_t elapsed_ms)
 {
     if (kk_gesture_center_is_active()) {
-        /* SETTLE 等待回正：仍跟 pose，勿冻结遥测 */
+        /* SETTLE 等待回正：仍发 pose，勿冻结遥测 */
         s_yaw_deg = s_pose_yaw;
         s_pitch_deg = s_pose_pitch;
         return;

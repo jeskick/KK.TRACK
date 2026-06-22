@@ -47,8 +47,12 @@ void kk_gesture_center_suppress(uint32_t now_ms)
 
 bool kk_gesture_center_is_active(void)
 {
-    /* 仅 SETTLE 等待回正；摆动检测期不冻结遥测 */
     return s_state == KK_GS_SETTLE;
+}
+
+bool kk_gesture_center_in_progress(void)
+{
+    return s_state != KK_GS_IDLE || s_swing_start_ms != 0;
 }
 
 void kk_gesture_center_poll(float roll_deg, float pitch_deg, float yaw_deg,
@@ -76,17 +80,11 @@ void kk_gesture_center_poll(float roll_deg, float pitch_deg, float yaw_deg,
 
     const bool roll_neut =
         roll_deg <= KK_TX_ROLL_NEUT_DEG && roll_deg >= -KK_TX_ROLL_NEUT_DEG;
-    const bool roll_vertical = fabsf(roll_deg) >= KK_TX_GESTURE_ROLL_ABORT_DEG;
-
-    if (roll_vertical && s_state != KK_GS_IDLE) {
-        ESP_LOGW(TAG, "gesture abort vertical roll R=%d", (int)roll_deg);
-        kk_gesture_to_idle();
-        return;
-    }
+    const bool roll_gimbal = fabsf(roll_deg) >= KK_IMU_GIMBAL_ROLL_DEG;
 
     switch (s_state) {
     case KK_GS_IDLE:
-        if (roll_vertical) {
+        if (roll_gimbal) {
             break;
         }
         if (s_swing_start_ms == 0) {

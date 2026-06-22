@@ -1,0 +1,27 @@
+---
+description: RX/TX 固件编译时自动 bump 版本并更新 ota/*.bin
+globs: receiver/pio/rx/**,transmitter/pio/tx/**,tools/pio_fw_version.py,ota/**
+alwaysApply: false
+---
+
+# 固件版本与 OTA 包
+
+每次 **`pio run`**（RX 或 TX）会自动：
+
+1. 将对应 `CMakeLists.txt` 里 `project(... VERSION "x.y.z")` 的 **patch +1**
+2. 编译成功后复制 `firmware.bin` → `ota/RX.x.y.z.bin` 或 `ota/TX.x.y.z.bin`
+
+实现：`tools/pio_fw_version.py`（通过各 `platformio.ini` 的 `pre:` 挂载）。
+
+## 约定
+
+- RX 版本：`receiver/pio/rx/CMakeLists.txt`
+- TX 版本：`transmitter/pio/tx/CMakeLists.txt`
+- OTA 包命名：**`RX.1.0.9.bin`** / **`TX.1.0.8.bin`**（版本号与 CMakeLists 一致）
+- 网页 OTA 上传同名文件（也兼容旧名 `RX.bin` / `TX.bin`）
+- USB 全片烧录脚本 `flash_rx.ps1` / `flash_tx.ps1` 内部也会 `pio run`，同样会 bump 并写入 `ota/`
+
+## 代理须知
+
+- 改完固件后帮用户编译时，**不要手改版本号**（pre 脚本会 bump）；若需指定版本，改 CMakeLists 后再编译一次即可。
+- OTA 顺序：**先 RX，再 TX**；TX OTA 需 RX↔TX 已配对连接。

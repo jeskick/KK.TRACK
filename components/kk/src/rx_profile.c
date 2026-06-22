@@ -10,7 +10,7 @@ kk_rx_profile_t kk_rx_profile_defaults(void)
 {
     kk_rx_profile_t p = {
         .ch_lr = 6,
-        .ch_ud = 5,
+        .ch_ud = 7,
         .offset_lr = -280,
         .offset_ud = 0,
         .scale_lr = KK_RX_SCALE_NEUT,

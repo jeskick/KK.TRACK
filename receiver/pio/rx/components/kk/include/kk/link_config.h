@@ -14,6 +14,23 @@
 
 #define KK_BLE_SVC_UUID16        0xFFF0
 #define KK_BLE_CH_LINK_UUID16    0xFFF1
+#define KK_BLE_CH_OTA_UUID16     0xFFF2
+
+/* OTA：网页上传 RX.1.2.3.bin / TX.1.2.3.bin；编译输出在 ota/ 同格式 */
+#define KK_OTA_FN_RX               "RX.*.bin"
+#define KK_OTA_FN_TX               "TX.*.bin"
+#define KK_OTA_HTTP_BUF            1024
+#define KK_OTA_TX_HTTP_BUF         256   /* TX 中继：小缓冲减轻 WiFi+BLE 并发内存压力 */
+#define KK_OTA_BLE_CHUNK_MIN       20
+#define KK_OTA_BLE_CHUNK_MAX       244   /* 单 mbuf 块 256B；也受 ATT MTU-3 限制 */
+#define KK_OTA_BLE_PACE_MS         15UL  /* notify 间隔，减轻 WiFi+BLE 并发与 RX 复位风险 */
+#define KK_OTA_TX_RDY_MS           20000UL
+#define KK_OTA_TX_CHUNK_WAIT_MS    25000UL /* 单 HTTP 块 BLE 中继最长等待 */
+#define KK_OTA_TX_RELAY_TOTAL_MS   (10UL * 60UL * 1000UL) /* 整包 TX OTA 上限 */
+#define KK_OTA_TX_STALL_MS         90000UL /* TX 侧无 chunk 则放弃 */
+#define KK_OTA_TX_FINISH_MS        45000UL /* 等 TX OTA,DONE 或断链 */
+#define KK_OTA_TX_IMAGE_MAX        1740800UL /* TWO_OTA_LARGE 单槽上限 */
+#define KK_OTA_REBOOT_DELAY_MS     800UL
 
 #define KK_UDP_PORT              4210
 #define KK_PREFS_NS              "kk_link"
@@ -120,12 +137,11 @@
 /* 摆动角度/超时由 RX 网页配置，经 BLE GES 同步；见 gesture_cfg.h */
 #define KK_TX_ROLL_NEUT_DEG            10.0f
 #define KK_TX_ROLL_SETTLE_MS           700UL
-#define KK_TX_ROLL_SETTLE_TIMEOUT_MS   1500UL
+#define KK_TX_ROLL_SETTLE_TIMEOUT_MS   2500UL
 #define KK_TX_ROLL_GESTURE_COOLDOWN_MS 4000UL
 /* 手势回中：须 Roll 轴主导，避免 Pitch/Yaw 耦合误触发 */
 #define KK_TX_GESTURE_GYRO_ROLL_DPS    22.0f
 #define KK_TX_GESTURE_POLL_MS          20UL
-/* |Roll| 接近垂直：欧拉奇异 + 非手势姿态，中止手势并旁路解耦 */
+/* |Roll| 接近垂直：欧拉奇异区，不启动新手势 */
 #define KK_IMU_GIMBAL_ROLL_DEG         55.0f
 #define KK_IMU_POSE_CLAMP_DEG          90.0f
-#define KK_TX_GESTURE_ROLL_ABORT_DEG   50.0f

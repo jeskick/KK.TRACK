@@ -1,6 +1,7 @@
 #include "ble_tx.h"
 #include "imu_tx.h"
 #include "tx_gesture.h"
+#include "tx_ota.h"
 
 #include "kk/gesture_cfg.h"
 #include "kk/tx_track_cfg.h"
@@ -10,6 +11,7 @@
 #include "kk/repair.h"
 #include "kk/storage.h"
 #include "kk/time.h"
+#include "kk/fw_version.h"
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -29,6 +31,8 @@ static const char *TAG = "kk.ble.tx";
 
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t s_link_val_handle;
+static uint16_t s_ota_val_handle;
+static uint16_t s_att_mtu = 23;
 static bool s_connected;
 static bool s_gatt_ready;
 static bool s_busy;
@@ -144,6 +148,8 @@ static void kk_ble_tx_gap_reset(void)
     s_have_peer = false;
     s_disc_complete = false;
     s_link_val_handle = 0;
+    s_ota_val_handle = 0;
+    s_att_mtu = 23;
     kk_delay_ms(500);
 }
 
@@ -171,7 +177,7 @@ static bool kk_ble_tx_wait_gatt_ready(uint32_t timeout_ms)
     while (s_connected && !s_gatt_ready && kk_millis() < deadline) {
         kk_delay_ms(20);
     }
-    return s_gatt_ready && s_link_val_handle != 0;
+    return s_gatt_ready && s_link_val_handle != 0 && s_ota_val_handle != 0;
 }
 
 static bool kk_ble_tx_parse_mac(const char *mac_str, ble_addr_t *out)
@@ -200,9 +206,12 @@ static int kk_ble_tx_on_chr(uint16_t conn_handle, const struct ble_gatt_error *e
     if (error->status == BLE_HS_EDONE) {
         s_busy = false;
         s_gatt_ready = true;
-        ESP_LOGW(TAG, "GATT ready");
-        if (s_link_val_handle != 0) {
+        ESP_LOGW(TAG, "GATT ready link=%u ota=%u", (unsigned)s_link_val_handle,
+                 (unsigned)s_ota_val_handle);
+        if (s_link_val_handle != 0 && s_ota_val_handle != 0) {
             ESP_LOGW(TAG, "=== LINK OK ===");
+        } else if (s_link_val_handle != 0) {
+            ESP_LOGW(TAG, "LINK OK but OTA char missing");
         }
         return 0;
     }
@@ -211,6 +220,11 @@ static int kk_ble_tx_on_chr(uint16_t conn_handle, const struct ble_gatt_error *e
     }
     if (ble_uuid_u16(&chr->uuid.u) == KK_BLE_CH_LINK_UUID16) {
         s_link_val_handle = chr->val_handle;
+        ble_gattc_disc_all_dscs(conn_handle, chr->val_handle, chr->def_handle,
+                                kk_ble_tx_on_dsc, NULL);
+    }
+    if (ble_uuid_u16(&chr->uuid.u) == KK_BLE_CH_OTA_UUID16) {
+        s_ota_val_handle = chr->val_handle;
         ble_gattc_disc_all_dscs(conn_handle, chr->val_handle, chr->def_handle,
                                 kk_ble_tx_on_dsc, NULL);
     }
@@ -342,6 +356,8 @@ static int kk_ble_tx_gap_event(struct ble_gap_event *event, void *arg)
         s_connected = false;
         s_gatt_ready = false;
         s_busy = false;
+        s_link_val_handle = 0;
+        s_ota_val_handle = 0;
         ESP_LOGW(TAG, "disconnected");
         if (s_on_disconnect) {
             s_on_disconnect();
@@ -349,12 +365,46 @@ static int kk_ble_tx_gap_event(struct ble_gap_event *event, void *arg)
         return 0;
 
     case BLE_GAP_EVENT_NOTIFY_RX: {
-        uint8_t buf[32];
+        if (s_ota_val_handle != 0 && event->notify_rx.attr_handle == s_ota_val_handle) {
+            if (!kk_tx_ota_is_active()) {
+                return 0;
+            }
+            uint8_t chunk[KK_OTA_BLE_CHUNK_MAX];
+            uint16_t len = OS_MBUF_PKTLEN(event->notify_rx.om);
+            if (len > sizeof(chunk)) {
+                ESP_LOGW(TAG, "OTA chunk too large %u", (unsigned)len);
+                kk_tx_ota_request_abort();
+                return 0;
+            }
+            if (len == 0) {
+                return 0;
+            }
+            os_mbuf_copydata(event->notify_rx.om, 0, len, chunk);
+            (void)kk_tx_ota_on_chunk(chunk, len);
+            return 0;
+        }
+        uint8_t buf[KK_OTA_BLE_CHUNK_MAX];
         uint16_t len = OS_MBUF_PKTLEN(event->notify_rx.om);
         if (len > sizeof(buf)) {
             len = sizeof(buf);
         }
         os_mbuf_copydata(event->notify_rx.om, 0, len, buf);
+
+        /* LINK 通道：OTA 控制命令优先，禁止把 OTA,END 当固件数据 */
+        if (len >= 10 && memcmp(buf, "OTA,START,", 10) == 0) {
+            if (s_ota_val_handle == 0) {
+                ble_gattc_write_no_rsp_flat(s_conn_handle, s_link_val_handle, "OTA,ERR", 7);
+            } else if (!kk_tx_ota_link_cmd(buf, len)) {
+                ble_gattc_write_no_rsp_flat(s_conn_handle, s_link_val_handle, "OTA,ERR", 7);
+            }
+            return 0;
+        }
+        if (kk_tx_ota_link_cmd(buf, len)) {
+            return 0;
+        }
+        if (kk_tx_ota_is_active()) {
+            return 0;
+        }
         if (kk_repair_cmd_match(buf, len)) {
             kk_ble_tx_flag(KK_BLE_TX_F_REPAIR);
             return 0;
@@ -411,11 +461,21 @@ static bool kk_ble_tx_start_connect(void)
     return true;
 }
 
+static void kk_ble_tx_ota_signal(const char *msg)
+{
+    if (!msg || s_conn_handle == BLE_HS_CONN_HANDLE_NONE || s_link_val_handle == 0) {
+        return;
+    }
+    ble_gattc_write_no_rsp_flat(s_conn_handle, s_link_val_handle, msg, (uint16_t)strlen(msg));
+}
+
 void kk_ble_tx_init(void)
 {
     kk_ble_tx_sm_open();
-    ESP_ERROR_CHECK(nimble_port_init());
+    kk_tx_ota_set_signal_fn(kk_ble_tx_ota_signal);
     ble_hs_cfg.sync_cb = kk_ble_tx_on_sync;
+    ESP_ERROR_CHECK(nimble_port_init());
+    ble_att_set_preferred_mtu(517);
     ble_svc_gap_init();
     nimble_port_freertos_init(kk_ble_tx_host_task);
 }
@@ -432,7 +492,7 @@ bool kk_ble_tx_is_link_ready(void)
 
 bool kk_ble_tx_send_telemetry(const char *payload)
 {
-    if (!kk_ble_tx_is_link_ready() || !payload) {
+    if (!kk_ble_tx_is_link_ready() || !payload || kk_tx_ota_is_active()) {
         return false;
     }
     const size_t len = strlen(payload);
@@ -454,6 +514,13 @@ static bool kk_ble_tx_finish_pair(bool save_mac)
     if (!kk_ble_tx_wait_gatt_ready(5000)) {
         ESP_LOGW(TAG, "GATT timeout");
         return false;
+    }
+    ble_gattc_exchange_mtu(s_conn_handle, NULL, NULL);
+    kk_delay_ms(150);
+    if (s_link_val_handle != 0) {
+        char ver[40];
+        snprintf(ver, sizeof(ver), "VER,%s", kk_fw_local_version());
+        ble_gattc_write_no_rsp_flat(s_conn_handle, s_link_val_handle, ver, strlen(ver));
     }
     if (s_have_peer && save_mac) {
         char mac[24];

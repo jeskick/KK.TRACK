@@ -4,13 +4,19 @@
 #include "kk/imu_mount.h"
 #include "kk/gesture_cfg.h"
 #include "kk/rx_profile.h"
+#include "kk/rx_ota.h"
 #include "kk/tx_track_cfg.h"
 #include "kk/telemetry.h"
+#include "kk/link_config.h"
+#include "kk/fw_version.h"
 
 #include "kk/time.h"
 
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,8 +30,10 @@ static kk_rx_web_mount_sync_cb_t s_mount_sync;
 static kk_rx_web_gesture_sync_cb_t s_gesture_sync;
 static kk_rx_web_track_sync_cb_t s_track_sync;
 static kk_rx_web_saved_cb_t s_on_saved;
+static kk_rx_web_ota_prepare_cb_t s_ota_prepare;
+static volatile bool s_ota_http_slot;
 
-static void kk_rx_web_touch(void)
+void kk_rx_web_touch(void)
 {
     s_last_http_ms = kk_millis();
 }
@@ -78,9 +86,9 @@ static esp_err_t favicon_get(httpd_req_t *req)
 static esp_err_t status_get(httpd_req_t *req)
 {
     kk_rx_web_touch();
-    char buf[320];
+    char buf[400];
     uint8_t clr = s_profile ? s_profile->ch_lr : 6;
-    uint8_t cud = s_profile ? s_profile->ch_ud : 5;
+    uint8_t cud = s_profile ? s_profile->ch_ud : 7;
     uint8_t trk_str = s_profile ? s_profile->track_decouple_str_x100 : KK_TRACK_DEC_STR_DEFAULT;
     uint8_t trk_dom = s_profile ? s_profile->track_decouple_dom_x10 : KK_TRACK_DEC_DOM_DEFAULT;
     uint8_t trk_dec = s_profile && s_profile->track_decouple_en ? 1U : 0U;
@@ -88,11 +96,169 @@ static esp_err_t status_get(httpd_req_t *req)
     snprintf(buf, sizeof(buf),
              "{\"ppm_lr\":%u,\"ppm_ud\":%u,\"ch_lr\":%u,\"ch_ud\":%u,\"yaw\":%.2f,\"pitch\":%.2f,"
              "\"track_decouple_en\":%u,\"track_motion_en\":%u,"
-             "\"track_decouple_str_x100\":%u,\"track_decouple_dom_x10\":%u}",
+             "\"track_decouple_str_x100\":%u,\"track_decouple_dom_x10\":%u,"
+             "\"rx_ver\":\"%s\",\"tx_ver\":\"%s\",\"ota_max\":%u,\"ota_ready\":%u}",
              g_kk_ht.ppm_lr, g_kk_ht.ppm_ud, clr, cud, g_kk_ht.yaw_f, g_kk_ht.pitch_f, trk_dec,
-             trk_mob, trk_str, trk_dom);
+             trk_mob, trk_str, trk_dom, kk_fw_local_version(), kk_fw_tx_version(),
+             (unsigned)kk_rx_ota_max_image_bytes(),
+             kk_rx_ota_max_image_bytes() > 0U ? 1U : 0U);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
+}
+
+static void kk_rx_web_ota_json(char *buf, size_t cap)
+{
+    const kk_ota_status_t *st = kk_rx_ota_status();
+    const char *target = "idle";
+    if (st->phase == KK_OTA_RX_LOCAL) {
+        target = "rx";
+    } else if (st->phase == KK_OTA_TX_RELAY) {
+        target = "tx";
+    }
+    snprintf(buf, cap,
+             "{\"active\":%u,\"target\":\"%s\",\"pct\":%u,\"tx_pct\":%u,"
+             "\"written\":%u,\"total\":%u,\"err\":%d,\"msg\":\"%s\"}",
+             kk_rx_ota_is_active() ? 1U : 0U, target, st->pct, st->tx_pct,
+             (unsigned)st->written, (unsigned)st->total, st->err, st->msg);
+}
+
+static esp_err_t ota_status_get(httpd_req_t *req)
+{
+    kk_rx_web_touch();
+    char buf[256];
+    kk_rx_web_ota_json(buf, sizeof(buf));
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t ota_stream_run(httpd_req_t *req, bool target_tx, char *out, size_t out_cap)
+{
+    kk_rx_web_touch();
+    if (kk_rx_ota_is_active()) {
+        snprintf(out, out_cap, "{\"ok\":false,\"err\":\"busy\"}");
+        return ESP_OK;
+    }
+
+    const size_t total = req->content_len;
+    const size_t max_bytes = target_tx ? (size_t)KK_OTA_TX_IMAGE_MAX : kk_rx_ota_max_image_bytes();
+    if (total == 0 || total > max_bytes) {
+        snprintf(out, out_cap, "{\"ok\":false,\"err\":\"size\",\"max\":%u}",
+                 (unsigned)max_bytes);
+        return ESP_OK;
+    }
+
+    if (s_ota_prepare) {
+        s_ota_prepare();
+    }
+
+    esp_err_t err = target_tx ? kk_rx_ota_tx_begin(total) : kk_rx_ota_local_begin(total);
+    if (err != ESP_OK) {
+        const kk_ota_status_t *st = kk_rx_ota_status();
+        snprintf(out, out_cap, "{\"ok\":false,\"err\":\"begin\",\"code\":%d,\"msg\":\"%s\"}",
+                 (int)err, st && st->msg[0] ? st->msg : "begin");
+        return ESP_OK;
+    }
+
+    uint8_t raw[target_tx ? KK_OTA_TX_HTTP_BUF : KK_OTA_HTTP_BUF];
+    size_t got = 0;
+    const uint32_t relay_t0 = target_tx ? kk_millis() : 0;
+    while (got < total) {
+        if (target_tx && kk_millis() - relay_t0 > KK_OTA_TX_RELAY_TOTAL_MS) {
+            kk_rx_ota_tx_abort();
+            snprintf(out, out_cap, "{\"ok\":false,\"err\":\"timeout\",\"msg\":\"tx relay\"}");
+            return ESP_OK;
+        }
+        const size_t want = total - got;
+        const size_t chunk = want > sizeof(raw) ? sizeof(raw) : want;
+        const int n = httpd_req_recv(req, (char *)raw, chunk);
+        if (n <= 0) {
+            if (target_tx) {
+                kk_rx_ota_tx_abort();
+            } else {
+                kk_rx_ota_local_abort();
+            }
+            snprintf(out, out_cap, "{\"ok\":false,\"err\":\"recv\"}");
+            return ESP_OK;
+        }
+        kk_rx_web_touch();
+        err = target_tx ? kk_rx_ota_tx_write(raw, (size_t)n) : kk_rx_ota_local_write(raw, (size_t)n);
+        if (err != ESP_OK) {
+            if (target_tx) {
+                kk_rx_ota_tx_abort();
+            } else {
+                kk_rx_ota_local_abort();
+            }
+            snprintf(out, out_cap, "{\"ok\":false,\"err\":\"write\",\"code\":%d}", (int)err);
+            return ESP_OK;
+        }
+        got += (size_t)n;
+    }
+
+    err = target_tx ? kk_rx_ota_tx_finish() : kk_rx_ota_local_finish();
+    if (err != ESP_OK) {
+        snprintf(out, out_cap, "{\"ok\":false,\"err\":\"finish\",\"code\":%d}", (int)err);
+        return ESP_OK;
+    }
+    snprintf(out, out_cap, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+typedef struct {
+    httpd_req_t *req;
+    bool target_tx;
+    char out[160];
+} ota_http_job_t;
+
+static void ota_http_task(void *arg)
+{
+    ota_http_job_t *job = (ota_http_job_t *)arg;
+    (void)ota_stream_run(job->req, job->target_tx, job->out, sizeof(job->out));
+    httpd_resp_set_type(job->req, "application/json");
+    httpd_resp_send(job->req, job->out, HTTPD_RESP_USE_STRLEN);
+    httpd_req_async_handler_complete(job->req);
+    s_ota_http_slot = false;
+    free(job);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t ota_stream_post(httpd_req_t *req, bool target_tx)
+{
+    if (s_ota_http_slot || kk_rx_ota_is_active()) {
+        return httpd_resp_send(req, "{\"ok\":false,\"err\":\"busy\"}", HTTPD_RESP_USE_STRLEN);
+    }
+    s_ota_http_slot = true;
+
+    ota_http_job_t *job = (ota_http_job_t *)calloc(1, sizeof(*job));
+    if (!job) {
+        s_ota_http_slot = false;
+        return httpd_resp_send(req, "{\"ok\":false,\"err\":\"nomem\"}", HTTPD_RESP_USE_STRLEN);
+    }
+    job->target_tx = target_tx;
+
+    esp_err_t err = httpd_req_async_handler_begin(req, &job->req);
+    if (err != ESP_OK) {
+        s_ota_http_slot = false;
+        free(job);
+        return httpd_resp_send(req, "{\"ok\":false,\"err\":\"async\"}", HTTPD_RESP_USE_STRLEN);
+    }
+
+    if (xTaskCreate(ota_http_task, "ota_http", 16384, job, tskIDLE_PRIORITY + 2, NULL) != pdPASS) {
+        s_ota_http_slot = false;
+        httpd_req_async_handler_complete(job->req);
+        free(job);
+        return httpd_resp_send(req, "{\"ok\":false,\"err\":\"nomem\"}", HTTPD_RESP_USE_STRLEN);
+    }
+    return ESP_OK;
+}
+
+static esp_err_t ota_rx_post(httpd_req_t *req)
+{
+    return ota_stream_post(req, false);
+}
+
+static esp_err_t ota_tx_post(httpd_req_t *req)
+{
+    return ota_stream_post(req, true);
 }
 
 static esp_err_t config_get(httpd_req_t *req)
@@ -149,6 +315,9 @@ static bool kk_web_read_body(httpd_req_t *req, char *body, size_t cap)
 static esp_err_t save_post(httpd_req_t *req)
 {
     kk_rx_web_touch();
+    if (kk_rx_ota_is_active()) {
+        return httpd_resp_send(req, "{\"ok\":false,\"err\":\"ota\"}", HTTPD_RESP_USE_STRLEN);
+    }
     char body[512];
     if (!kk_web_read_body(req, body, sizeof(body))) {
         ESP_LOGW(TAG, "[WEB] save recv fail len=%d", (int)req->content_len);
@@ -224,6 +393,9 @@ static esp_err_t save_post(httpd_req_t *req)
 static esp_err_t reset_post(httpd_req_t *req)
 {
     kk_rx_web_touch();
+    if (kk_rx_ota_is_active()) {
+        return httpd_resp_send(req, "{\"ok\":false,\"err\":\"ota\"}", HTTPD_RESP_USE_STRLEN);
+    }
     if (!s_profile) {
         return httpd_resp_send(req, "{\"ok\":false}", HTTPD_RESP_USE_STRLEN);
     }
@@ -275,8 +447,11 @@ void kk_rx_web_begin(kk_rx_profile_t *profile)
         return;
     }
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_uri_handlers = 10;
-    cfg.recv_wait_timeout = 10;
+    cfg.max_uri_handlers = 12;
+    cfg.max_open_sockets = 4;
+    cfg.stack_size = 8192;
+    cfg.recv_wait_timeout = 120;
+    cfg.send_wait_timeout = 30;
     cfg.lru_purge_enable = true;
     if (httpd_start(&s_server, &cfg) != ESP_OK) {
         s_server = NULL;
@@ -289,6 +464,9 @@ void kk_rx_web_begin(kk_rx_profile_t *profile)
         {.uri = "/api/config", .method = HTTP_GET, .handler = config_get},
         {.uri = "/api/save", .method = HTTP_POST, .handler = save_post},
         {.uri = "/api/reset", .method = HTTP_POST, .handler = reset_post},
+        {.uri = "/api/ota/status", .method = HTTP_GET, .handler = ota_status_get},
+        {.uri = "/api/ota/rx", .method = HTTP_POST, .handler = ota_rx_post},
+        {.uri = "/api/ota/tx", .method = HTTP_POST, .handler = ota_tx_post},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         httpd_register_uri_handler(s_server, &uris[i]);
@@ -303,6 +481,11 @@ void kk_rx_web_set_track_sync(kk_rx_web_track_sync_cb_t cb)
 void kk_rx_web_set_on_saved(kk_rx_web_saved_cb_t cb)
 {
     s_on_saved = cb;
+}
+
+void kk_rx_web_set_ota_prepare(kk_rx_web_ota_prepare_cb_t cb)
+{
+    s_ota_prepare = cb;
 }
 
 void kk_rx_web_handle(void)

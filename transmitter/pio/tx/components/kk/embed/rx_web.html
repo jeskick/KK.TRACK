@@ -1,10 +1,14 @@
-<!DOCTYPE html><html lang="zh-CN"><head>
+<!DOCTYPE html><html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>KK-TRACK CONFIG.RX</title>
+<title>KK RX</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#0f1419;color:#e7ecf3;line-height:1.4;padding:10px;max-width:480px;margin:0 auto;font-size:14px}
 h1{font-size:1.1rem;margin-bottom:10px;color:#8ec8ff}
+.topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:10px}
+.topbar h1{margin-bottom:0;flex:1}
+.ver-box{display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:.72rem;color:#8b98a8;white-space:nowrap}
+.ver-box b{color:#8ec8ff;font-weight:600}
 h2{font-size:.88rem;margin:0 0 8px;color:#9aa7b8;font-weight:600}
 .card{background:#1a2332;border-radius:10px;padding:10px;margin-bottom:8px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}
@@ -16,17 +20,18 @@ h2{font-size:.88rem;margin:0 0 8px;color:#9aa7b8;font-weight:600}
 .line{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px}
 .line>label{color:#b8c5d6;font-size:.82rem;white-space:nowrap}
 .slider-row{display:flex;align-items:center;gap:6px;margin-bottom:8px}
-.slider-lbl{flex:0 0 78px;color:#b8c5d6;font-size:.78rem;white-space:nowrap}
-.slider-row input[type=range]{flex:1;min-width:0;height:24px;margin:0}
+.slider-lbl{flex:0 0 88px;color:#b8c5d6;font-size:.78rem;white-space:nowrap}
+.slider-row input[type=range],.scale-line input[type=range]{flex:1;min-width:0;margin:0}
+.slider-row input[type=range]{height:24px}
 .scale-cell{display:flex;flex-direction:column;gap:4px;min-width:0}
 .scale-cell label{font-size:.78rem;color:#b8c5d6}
 .scale-line{display:flex;align-items:center;gap:6px}
-.scale-line input[type=range]{flex:1;min-width:0;height:22px;margin:0}
+.scale-line input[type=range]{height:22px}
 .pct{flex:0 0 38px;font-size:.78rem;color:#8ec8ff;text-align:right;font-weight:600}
 .in-num{width:52px;padding:5px 4px;border:1px solid #2d3a4d;border-radius:6px;background:#121a24;color:#fff;font-size:13px;text-align:center;-moz-appearance:textfield}
 .in-num::-webkit-outer-spin-button,.in-num::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .sel{width:52px;padding:4px;border:1px solid #2d3a4d;border-radius:6px;background:#121a24;color:#fff;font-size:14px}
-.sel-yaw{width:62px}
+.sel-y{width:62px}
 .hint{font-size:.68rem;color:#6d7a8a;margin:-2px 0 8px;line-height:1.35}
 .btns{display:flex;gap:8px;margin-top:6px}
 .btn{flex:1;padding:10px;border:0;border-radius:8px;font-size:.9rem;color:#fff;background:#3d4a5c}
@@ -35,69 +40,73 @@ h2{font-size:.88rem;margin:0 0 8px;color:#9aa7b8;font-weight:600}
 .chk input{width:16px;height:16px}
 .gest-row{display:flex;align-items:center;gap:6px;margin-bottom:8px}
 .gest-ms{flex:1;min-width:0;margin-bottom:0!important}
-.gest-ms .slider-lbl{flex:0 0 48px}
+.ota-line{display:flex;align-items:center;gap:8px;margin-bottom:8px;min-width:0}
+.ota-line input[type=file]{flex:1;min-width:0;width:0;font-size:.72rem;color:#b8c5d6}
+.btn.btn-ota{flex:0 0 auto;width:auto;white-space:nowrap;padding:10px 14px;font-size:.85rem}
+.ota-st{display:flex;flex-direction:column;gap:4px;font-size:.78rem}
+.ota-st .pct{text-align:left;color:#8ec8ff;font-weight:600}
+.ota-st .msg{text-align:left;line-height:1.35;color:#7dffb2}
 </style>
 </head><body>
-<h1>KK-TRACK CONFIG.RX</h1>
+<div class="topbar"><h1>KK-TRACK RX</h1><div class="ver-box"><span>RX <b id="ver_rx">--</b></span><span>TX <b id="ver_tx">--</b></span></div></div>
 <div class="card">
 <div class="status-line">
-<span class="st"><label>左右 µs</label><span class="val" id="plr">--</span></span>
-<span class="st"><label>上下 µs</label><span class="val" id="pud">--</span></span>
+<span class="st"><label>LR µs</label><span class="val" id="plr">--</span></span>
+<span class="st"><label>UD µs</label><span class="val" id="pud">--</span></span>
 </div>
 <div class="status-line">
-<span class="st"><label>解耦抑制%</label><span class="val" id="v_str">--</span></span>
-<span class="st"><label>检测阈值%</label><span class="val" id="v_dom">--</span></span>
+<span class="st"><label>解耦%</label><span class="val" id="v_str">--</span></span>
+<span class="st"><label>阈值%</label><span class="val" id="v_dom">--</span></span>
 </div>
 </div>
 <div class="card">
 <h2>设置 <span class="msg" id="msg"></span></h2>
-<form id="cfg">
 <div class="line">
-<label>YAW→CH</label><select class="sel" name="ch_lr" id="ch_lr"></select>
-<label>PITCH→CH</label><select class="sel" name="ch_ud" id="ch_ud"></select>
+<label>YAW→CH</label><select class="sel" id="ch_lr"></select>
+<label>PITCH→CH</label><select class="sel" id="ch_ud"></select>
 </div>
 <div class="line">
-<label>水平转°</label><select class="sel" id="mount_horiz"></select>
-<label>左右轴°</label><select class="sel" id="mount_lr"></select>
-<label>前后轴°</label><select class="sel" id="mount_fb"></select>
+<label>YAW°</label><select class="sel" id="mount_horiz"></select>
+<label>PITCH°</label><select class="sel" id="mount_lr"></select>
+<label>ROLL°</label><select class="sel" id="mount_fb"></select>
 </div>
-<p class="hint">安装方向：默认 YAW←Z、PITCH←X。三轴角度保存后同步 TX。</p>
+<p class="hint">安装：YAW←Z PITCH←X，保存同步 TX</p>
 <div class="line">
-<label>YAW舵机</label><select class="sel sel-yaw" id="yaw_servo"></select>
+<label>YAW舵机</label><select class="sel sel-y" id="yaw_servo"></select>
 <label class="chk"><input type="checkbox" id="rev_lr">YAW-REV</label>
 <label class="chk"><input type="checkbox" id="rev_ud">PITCH-REV</label>
 </div>
-<p class="hint">YAW(LR)：180°=1000–2000µs；270°=500–2500µs。俯仰(UD)固定180°舵机。</p>
+<p class="hint">YAW 180/270°舵机；PITCH 固定180°</p>
 <div class="slider-row">
-<label class="slider-lbl">左右偏移µs</label>
+<label class="slider-lbl">YAW-OFFSET</label>
 <input type="range" id="off_lr_s" min="-400" max="400" step="1">
-<input class="in-num" type="number" name="offset_lr" id="off_lr" min="-400" max="400">
+<input class="in-num" type="number" id="off_lr" min="-400" max="400">
 </div>
 <div class="slider-row">
-<label class="slider-lbl">上下偏移µs</label>
+<label class="slider-lbl">PITCH-OFFSET</label>
 <input type="range" id="off_ud_s" min="-400" max="400" step="1">
-<input class="in-num" type="number" name="offset_ud" id="off_ud" min="-400" max="400">
+<input class="in-num" type="number" id="off_ud" min="-400" max="400">
 </div>
 <div class="grid2">
 <div class="scale-cell">
-<label>左右输出</label>
+<label>YAW→SERVO</label>
 <div class="scale-line"><input type="range" id="scale_lr_s" min="1" max="100" step="1"><span class="pct" id="scale_lr_pct">100%</span></div>
 </div>
 <div class="scale-cell">
-<label>上下输出</label>
+<label>PITCH→SERVO</label>
 <div class="scale-line"><input type="range" id="scale_ud_s" min="1" max="100" step="1"><span class="pct" id="scale_ud_pct">100%</span></div>
 </div>
 </div>
-<p class="hint">输出比例：50=100%，100=150%，1=50%。左右/上下独立。</p>
+<p class="hint">比例 50=100% 100=150% 1=50%</p>
 <div class="gest-row">
-<label>动作回中°</label><select class="sel sel-yaw" id="gest_roll"></select>
+<label>回中°</label><select class="sel sel-y" id="gest_roll"></select>
 <div class="slider-row gest-ms">
 <label class="slider-lbl">超时ms</label>
 <input type="range" id="gest_ms_s" min="500" max="2000" step="100">
 <input class="in-num" type="number" id="gest_ms" min="500" max="2000" step="100">
 </div>
 </div>
-<p class="hint">左右各摆到设定角度后回正即自动回中；超时未完成则取消。</p>
+<p class="hint">左右摆到角度后回正即回中</p>
 <div class="line">
 <label class="chk"><input type="checkbox" id="track_dec" checked>轴解耦</label>
 <label class="chk"><input type="checkbox" id="track_mob" checked>移动检测</label>
@@ -112,19 +121,27 @@ h2{font-size:.88rem;margin:0 0 8px;color:#9aa7b8;font-weight:600}
 <input type="range" id="dec_dom_s" min="35" max="65" step="1" value="45">
 <input class="in-num" type="number" id="dec_dom" min="35" max="65" step="1" value="45">
 </div>
-<p class="hint">解耦抑制 70–90；检测阈值越小越早介入。移动检测：大动作时输出回个体中位。</p>
-<div class="btns"><button type="button" class="btn" id="btnReset">重置参数</button></div>
-</form>
+<p class="hint">解耦70–90；阈值越小越早介入</p>
+<div class="btns"><button type="button" class="btn" id="btnReset">重置</button></div>
+</div>
+<div class="card">
+<h2>OTA</h2>
+<div class="ota-line">
+<input type="file" id="ota_file" accept=".bin">
+<button type="button" class="btn btn-ota" id="btnOta">开始升级</button>
+</div>
+<div class="ota-st"><span class="pct" id="ota_pct"></span><span class="msg" id="ota_msg"></span></div>
 </div>
 <script>
 const $=id=>document.getElementById(id);
 const val=(id,d='')=>{const e=$(id);return e?e.value:d};
 const chk=id=>!!($(id)&&$(id).checked);
 const scalePct=v=>Math.round((0.5+v/100)*100)+'%';
+const API={cfg:'/api/config',st:'/api/status',save:'/api/save',rst:'/api/reset',ota:'/api/ota/status',orx:'/api/ota/rx',otx:'/api/ota/tx'};
 let saveT=null,loading=false;
-function fillSel(sel,vals,val,pre){
+function fillSel(sel,vals,v,pre){
   sel.innerHTML='';
-  vals.forEach(d=>{const o=document.createElement('option');o.value=d;o.textContent=(pre||'')+d+(pre?'':'°');o.selected=(d==val);sel.appendChild(o);});
+  vals.forEach(d=>{const o=document.createElement('option');o.value=d;o.textContent=(pre||'')+d+(pre?'':'°');o.selected=(d==v);sel.appendChild(o);});
 }
 function bindPair(s,n,onchg){
   const pull=()=>{n.value=s.value;if(onchg)onchg();};
@@ -161,13 +178,15 @@ function loadCfg(d){
   $('v_str').textContent=str+'%';$('v_dom').textContent=dom+'%';
   loading=false;
 }
-function fixCh(){
-  if($('ch_lr').value==$('ch_ud').value){
-    $('ch_ud').value=$('ch_lr').value==8?5:parseInt($('ch_lr').value,10)+1;
-  }
+const CHS=[5,6,7,8];
+function bumpCh(v){const i=CHS.indexOf(parseInt(v,10));return String(CHS[(i+1)%CHS.length]);}
+function fixCh(ch){
+  const lr=$('ch_lr'),ud=$('ch_ud');
+  if(lr.value!==ud.value)return;
+  (ch==='ch_lr'?ud:lr).value=bumpCh(lr.value);
 }
 ['ch_lr','ch_ud','yaw_servo','rev_lr','rev_ud','mount_horiz','mount_lr','mount_fb','gest_roll','track_dec','track_mob'].forEach(id=>{
-  $(id).onchange=()=>{if(id==='ch_lr')fixCh();scheduleSave();};
+  $(id).onchange=()=>{if(id==='ch_lr'||id==='ch_ud')fixCh(id);scheduleSave();};
 });
 function bindSliders(){
   bindPair($('dec_str_s'),$('dec_str'));
@@ -180,9 +199,9 @@ function bindSliders(){
 }
 async function doSave(){
   if(loading)return;
-  if(val('ch_lr','6')==val('ch_ud','5')){$('msg').textContent='通道冲突';return;}
+  if(val('ch_lr','6')==val('ch_ud','7')){$('msg').textContent='通道冲突';return;}
   const p=new URLSearchParams();
-  p.set('ch_lr',val('ch_lr','6'));p.set('ch_ud',val('ch_ud','5'));
+  p.set('ch_lr',val('ch_lr','6'));p.set('ch_ud',val('ch_ud','7'));
   p.set('offset_lr',val('off_lr','0'));p.set('offset_ud',val('off_ud','0'));
   p.set('scale_lr',val('scale_lr_s','50'));p.set('scale_ud',val('scale_ud_s','50'));
   p.set('yaw_servo_deg',val('yaw_servo','180'));
@@ -192,8 +211,7 @@ async function doSave(){
   p.set('track_decouple_en',chk('track_dec')?1:0);p.set('track_motion_en',chk('track_mob')?1:0);
   p.set('track_decouple_str_x100',val('dec_str','85'));p.set('track_decouple_dom_x10',val('dec_dom','45'));
   try{
-    const r=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p.toString()});
-    const j=await r.json();
+    const j=await(await fetch(API.save,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p.toString()})).json();
     $('msg').textContent=j.ok?'已保存':'失败';
     if(j.ok&&j.cfg)loadCfg(j.cfg);
   }catch(e){$('msg').textContent='失败';}
@@ -201,24 +219,84 @@ async function doSave(){
 function scheduleSave(){clearTimeout(saveT);$('msg').textContent='…';saveT=setTimeout(doSave,450);}
 async function poll(){
   try{
-    const r=await fetch('/api/status');const j=await r.json();
-    $('plr').textContent=j.ppm_lr+' µs (CH'+j.ch_lr+')';
-    $('pud').textContent=j.ppm_ud+' µs (CH'+j.ch_ud+')';
+    const j=await(await fetch(API.st)).json();
+    $('plr').textContent=j.ppm_lr+'µs CH'+j.ch_lr;
+    $('pud').textContent=j.ppm_ud+'µs CH'+j.ch_ud;
     if(j.track_decouple_str_x100!=null)$('v_str').textContent=j.track_decouple_str_x100+'%';
     if(j.track_decouple_dom_x10!=null)$('v_dom').textContent=j.track_decouple_dom_x10+'%';
+    if(j.rx_ver)$('ver_rx').textContent=j.rx_ver;
+    if(j.tx_ver)$('ver_tx').textContent=j.tx_ver;
   }catch(e){}
 }
 $('btnReset').onclick=async()=>{
-  if(!confirm('恢复默认参数？'))return;
+  if(!confirm('恢复默认？'))return;
   try{
-    const r=await fetch('/api/reset',{method:'POST'});
-    const j=await r.json();
+    const j=await(await fetch(API.rst,{method:'POST'})).json();
     if(j.ok&&j.cfg){loadCfg(j.cfg);$('msg').textContent='已重置';}
   }catch(e){$('msg').textContent='失败';}
 };
+let otaPoll=null,otaUp='';
+const OTA_RE=/^(RX|TX)\.\d+\.\d+\.\d+\.BIN$|^RX\.BIN$|^TX\.BIN$/;
+function otaRoute(n){
+  n=n.toUpperCase();
+  if(!OTA_RE.test(n))return null;
+  return n.startsWith('TX')?{p:API.otx,tx:1}:{p:API.orx,tx:0};
+}
+function fmtOta(j){
+  if(!j.active)return'';
+  if(j.target==='tx'){
+    let s='TX '+j.pct+'%';
+    if(j.written&&j.total)s+=' '+j.written+'/'+j.total;
+    if(j.tx_pct)s+=' TXr'+j.tx_pct+'%';
+    return s;
+  }
+  if(j.target==='rx'){
+    let s='RX '+j.pct+'%';
+    if(j.written&&j.total)s+=' '+j.written+'/'+j.total;
+    return s;
+  }
+  return j.pct+'%';
+}
+async function pollOta(){
+  try{
+    const j=await(await fetch(API.ota)).json();
+    if(j.active)$('ota_pct').textContent=fmtOta(j);
+    else if(otaUp)$('ota_pct').textContent='';
+    if(j.msg&&j.active)$('ota_msg').textContent=j.msg;
+    if(!j.active&&otaPoll){clearInterval(otaPoll);otaPoll=null;}
+  }catch(e){}
+}
+$('btnOta').onclick=async()=>{
+  const f=$('ota_file').files[0];
+  if(!f){$('ota_msg').textContent='请选择文件';return;}
+  const route=otaRoute(f.name);
+  if(!route){$('ota_msg').textContent='需 RX/TX x.y.z.bin';return;}
+  if(!confirm('升级 '+f.name+'？勿断电'+(route.tx?' TX约3–5分':'')))return;
+  otaUp=route.tx?'tx':'rx';
+  $('ota_msg').textContent=route.tx?'TX传输中…':'RX上传中…';
+  $('ota_pct').textContent='0%';
+  if(!otaPoll)otaPoll=setInterval(pollOta,500);
+  try{
+    const j=await(await fetch(route.p,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:f})).json();
+    otaUp='';
+    if(j.ok)$('ota_msg').textContent=route.tx?'TX完成，将重启':'RX完成，将重启';
+    else{
+      let m='失败';
+      if(j.err)m+=':'+j.err;
+      if(j.msg)m+=' '+j.msg;
+      if(j.code)m+='('+j.code+')';
+      if(j.max)m+=' max='+j.max;
+      $('ota_msg').textContent=m;
+    }
+  }catch(e){$('ota_msg').textContent='连接中断';}
+};
 async function boot(){
-  try{loadCfg(await(await fetch('/api/config')).json());}catch(e){}
+  try{loadCfg(await(await fetch(API.cfg)).json());}catch(e){}
   bindSliders();poll();setInterval(poll,500);
+  try{
+    const j=await(await fetch(API.st)).json();
+    if(j.ota_ready===0)$('ota_msg').textContent='OTA未就绪，需USB全片烧录';
+  }catch(e){}
 }
 boot();
 </script>
