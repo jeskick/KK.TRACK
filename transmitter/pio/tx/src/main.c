@@ -245,6 +245,7 @@ static void app_run_ble(void)
         poll_btn();
         kk_ble_tx_poll();
         kk_tx_ota_poll();
+        kk_tx_ota_poll_boot_confirm(kk_millis());
         poll_imu();
         if (!kk_tx_ota_is_active()) {
             kk_imu_tx_motion_poll();
@@ -316,6 +317,7 @@ static void app_run_imu_serial(void)
                    (int)kk_imu_tx_pitch_deg(), (int)kk_imu_tx_roll_deg());
         }
 
+        kk_tx_ota_poll_boot_confirm(kk_millis());
         led_update();
         taskYIELD();
     }
@@ -330,7 +332,6 @@ static void app_init(void)
 
     kk_tx_ota_init();
     kk_tx_ota_log_partitions();
-    kk_tx_ota_mark_boot_valid();
 
     kk_led_pins_init(PIN_LED_BLUE, PIN_LED_GREEN);
     kk_led_code_init(&s_led_code);

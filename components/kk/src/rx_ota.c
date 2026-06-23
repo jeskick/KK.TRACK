@@ -4,6 +4,7 @@
 
 #include "esp_log.h"
 #include "esp_ota_ops.h"
+#include "esp_partition.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -17,6 +18,9 @@ static esp_ota_handle_t s_handle;
 static size_t s_total;
 static size_t s_written;
 static bool s_open;
+static bool s_magic_checked;
+static bool s_boot_confirmed;
+static uint32_t s_boot_ms;
 static kk_rx_ota_tx_ops_t s_tx_ops;
 static uint8_t s_tx_log_pct;
 static uint8_t s_rx_log_pct;
@@ -50,6 +54,42 @@ static void kk_ota_format_msg(void)
     }
 }
 
+static bool kk_ota_part_ok(const esp_partition_t *part)
+{
+    const esp_partition_t *running;
+
+    if (!part) {
+        return false;
+    }
+    if (part->subtype != ESP_PARTITION_SUBTYPE_APP_OTA_0 &&
+        part->subtype != ESP_PARTITION_SUBTYPE_APP_OTA_1) {
+        ESP_LOGW(TAG, "OTA bad part subtype %u", (unsigned)part->subtype);
+        return false;
+    }
+    running = esp_ota_get_running_partition();
+    if (running && part->address == running->address) {
+        ESP_LOGW(TAG, "OTA refuse running part %s", part->label);
+        return false;
+    }
+    return true;
+}
+
+static bool kk_ota_check_magic(const uint8_t *data, size_t len)
+{
+    if (s_magic_checked || s_written > 0) {
+        return true;
+    }
+    if (!data || len == 0) {
+        return false;
+    }
+    if (data[0] != KK_OTA_IMAGE_MAGIC) {
+        ESP_LOGW(TAG, "OTA bad image magic 0x%02x", (unsigned)data[0]);
+        return false;
+    }
+    s_magic_checked = true;
+    return true;
+}
+
 void kk_rx_ota_init(void)
 {
     memset(&s_st, 0, sizeof(s_st));
@@ -58,6 +98,9 @@ void kk_rx_ota_init(void)
     s_total = 0;
     s_written = 0;
     s_open = false;
+    s_magic_checked = false;
+    s_boot_confirmed = false;
+    s_boot_ms = kk_millis();
 }
 
 void kk_rx_ota_log_partitions(void)
@@ -94,6 +137,26 @@ void kk_rx_ota_mark_boot_valid(void)
     }
 }
 
+void kk_rx_ota_poll_boot_confirm(uint32_t now_ms)
+{
+    if (s_boot_confirmed) {
+        return;
+    }
+    if (kk_rx_ota_is_active()) {
+        return;
+    }
+    if (s_boot_ms == 0 || now_ms < s_boot_ms) {
+        s_boot_ms = now_ms;
+        return;
+    }
+    if ((now_ms - s_boot_ms) < KK_OTA_BOOT_CONFIRM_MS) {
+        return;
+    }
+    kk_rx_ota_mark_boot_valid();
+    s_boot_confirmed = true;
+    ESP_LOGW(TAG, "boot confirm after %lums", (unsigned long)KK_OTA_BOOT_CONFIRM_MS);
+}
+
 const kk_ota_status_t *kk_rx_ota_status(void)
 {
     return &s_st;
@@ -120,8 +183,14 @@ static esp_err_t kk_ota_open(size_t size, kk_ota_phase_t phase)
     if (kk_rx_ota_is_active()) {
         return ESP_ERR_INVALID_STATE;
     }
+    if (phase == KK_OTA_RX_LOCAL) {
+        if (size < KK_OTA_RX_IMAGE_MIN) {
+            kk_ota_set(KK_OTA_ERR, 0, ESP_ERR_INVALID_SIZE, "image small");
+            return ESP_ERR_INVALID_SIZE;
+        }
+    }
     s_part = esp_ota_get_next_update_partition(NULL);
-    if (!s_part) {
+    if (!kk_ota_part_ok(s_part)) {
         kk_ota_set(KK_OTA_ERR, 0, ESP_ERR_NOT_FOUND, "no ota part");
         return ESP_ERR_NOT_FOUND;
     }
@@ -129,6 +198,7 @@ static esp_err_t kk_ota_open(size_t size, kk_ota_phase_t phase)
         kk_ota_set(KK_OTA_ERR, 0, ESP_ERR_INVALID_SIZE, "size");
         return ESP_ERR_INVALID_SIZE;
     }
+    s_magic_checked = false;
     esp_err_t err = esp_ota_begin(s_part, size, &s_handle);
     if (err != ESP_OK) {
         kk_ota_set(KK_OTA_ERR, 0, (int)err, "ota begin");
@@ -149,6 +219,11 @@ static esp_err_t kk_ota_write_chunk(const uint8_t *data, size_t len)
 {
     if (!s_open || !data || len == 0) {
         return ESP_ERR_INVALID_STATE;
+    }
+    if (s_st.phase == KK_OTA_RX_LOCAL && !kk_ota_check_magic(data, len)) {
+        kk_ota_close_failed();
+        kk_ota_set(KK_OTA_ERR, s_st.pct, ESP_ERR_INVALID_ARG, "bad magic");
+        return ESP_ERR_INVALID_ARG;
     }
     if (s_written + len > s_total) {
         kk_ota_close_failed();
@@ -185,6 +260,7 @@ static void kk_ota_close_failed(void)
     s_part = NULL;
     s_total = 0;
     s_written = 0;
+    s_magic_checked = false;
 }
 
 static void kk_ota_reboot_task(void *arg)
@@ -197,6 +273,17 @@ static void kk_ota_reboot_task(void *arg)
 static esp_err_t kk_ota_close_ok(const char *done_msg)
 {
     if (!s_open) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_written != s_total) {
+        ESP_LOGW(TAG, "OTA short written=%u total=%u", (unsigned)s_written, (unsigned)s_total);
+        kk_ota_close_failed();
+        kk_ota_set(KK_OTA_ERR, s_st.pct, ESP_ERR_INVALID_SIZE, "short image");
+        return ESP_ERR_INVALID_SIZE;
+    }
+    if (!kk_ota_part_ok(s_part)) {
+        kk_ota_close_failed();
+        kk_ota_set(KK_OTA_ERR, s_st.pct, ESP_ERR_INVALID_STATE, "bad part");
         return ESP_ERR_INVALID_STATE;
     }
     esp_err_t err = esp_ota_end(s_handle);
@@ -256,6 +343,10 @@ esp_err_t kk_rx_ota_tx_begin(size_t size)
     if (!s_tx_ops.ready()) {
         kk_ota_set(KK_OTA_ERR, 0, ESP_ERR_INVALID_STATE, "tx offline");
         return ESP_ERR_INVALID_STATE;
+    }
+    if (size < KK_OTA_TX_IMAGE_MIN || size > KK_OTA_TX_IMAGE_MAX) {
+        kk_ota_set(KK_OTA_ERR, 0, ESP_ERR_INVALID_SIZE, "tx size");
+        return ESP_ERR_INVALID_SIZE;
     }
     s_total = size;
     s_written = 0;
@@ -320,6 +411,10 @@ esp_err_t kk_rx_ota_tx_finish(void)
 {
     if (!s_tx_ops.finish || s_st.phase != KK_OTA_TX_RELAY) {
         return ESP_ERR_INVALID_STATE;
+    }
+    if (s_written != s_total) {
+        kk_ota_set(KK_OTA_ERR, s_st.pct, ESP_ERR_INVALID_SIZE, "relay short");
+        return ESP_ERR_INVALID_SIZE;
     }
     kk_ota_set(KK_OTA_TX_RELAY, s_st.pct, 0, "tx finalize");
     esp_err_t err = s_tx_ops.finish();

@@ -346,7 +346,6 @@ static void app_init(void)
     kk_wifi_rx_init();
     kk_rx_ota_init();
     kk_rx_ota_log_partitions();
-    kk_rx_ota_mark_boot_valid();
     kk_rx_ota_set_tx_ops(&s_ota_tx_ops);
     kk_rx_web_set_mount_sync(sync_mount_to_tx);
     kk_rx_web_set_gesture_sync(sync_gesture_to_tx);
@@ -461,6 +460,8 @@ void app_main(void)
             kk_head_track_poll(&g_profile, s_ble_on, s_ppm_on, now);
         }
         led_update();
+
+        kk_rx_ota_poll_boot_confirm(now);
 
         if (kk_diag_due(&s_hb_ms, KK_DIAG_LOG_MS)) {
             if (s_ppm_on && s_ble_on && g_kk_tel.last_pkt_ms > 0) {

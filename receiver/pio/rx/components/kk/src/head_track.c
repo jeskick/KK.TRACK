@@ -107,14 +107,30 @@ static void ht_hold_last_ppm(const kk_rx_profile_t *cfg)
     kk_ppm_commit();
 }
 
-static void ht_enter_failsafe(const kk_rx_profile_t *cfg)
+static void ht_output_offset_center(const kk_rx_profile_t *cfg)
 {
-    s_fs_from_lr = g_kk_ht.ppm_lr;
-    s_fs_from_ud = g_kk_ht.ppm_ud;
+    g_kk_ht.yaw_f = 0.0f;
+    g_kk_ht.pitch_f = 0.0f;
+    uint16_t lr = 0;
+    uint16_t ud = 0;
+    ht_offset_center_ppm(cfg, &lr, &ud);
+    ht_write_ppm(cfg, lr, ud);
+}
+
+static void ht_enter_failsafe(const kk_rx_profile_t *cfg, bool snap)
+{
     s_fs_ramp_ms = 0;
     s_fs_recover_ms = 0;
+    if (snap) {
+        s_fs_state = HT_FS_HOLD;
+        ht_output_offset_center(cfg);
+        ESP_LOGW(TAG, "BLE down -> offset center snap");
+        return;
+    }
+    s_fs_from_lr = g_kk_ht.ppm_lr;
+    s_fs_from_ud = g_kk_ht.ppm_ud;
     s_fs_state = HT_FS_RAMP;
-    ESP_LOGW(TAG, "link lost -> offset center ramp from lr=%u ud=%u", (unsigned)s_fs_from_lr,
+    ESP_LOGW(TAG, "tel lost -> offset center ramp from lr=%u ud=%u", (unsigned)s_fs_from_lr,
              (unsigned)s_fs_from_ud);
 }
 
@@ -127,16 +143,6 @@ static void ht_resume_track(void)
     s_fs_recover_ms = 0;
     s_apply_last_ms = 0;
     ESP_LOGW(TAG, "link stable -> resume track");
-}
-
-static void ht_output_offset_center(const kk_rx_profile_t *cfg)
-{
-    g_kk_ht.yaw_f = 0.0f;
-    g_kk_ht.pitch_f = 0.0f;
-    uint16_t lr = 0;
-    uint16_t ud = 0;
-    ht_offset_center_ppm(cfg, &lr, &ud);
-    ht_write_ppm(cfg, lr, ud);
 }
 
 static void ht_failsafe_step(const kk_rx_profile_t *cfg, uint32_t elapsed_ms, bool link_ok)
@@ -286,13 +292,20 @@ void kk_head_track_poll(const kk_rx_profile_t *cfg, bool ble_connected, bool ppm
             kk_head_track_apply(cfg);
             return;
         }
+        if (!ble_connected && s_fs_state == HT_FS_RAMP) {
+            s_fs_state = HT_FS_HOLD;
+            ht_output_offset_center(cfg);
+        }
         ht_failsafe_step(cfg, elapsed_ms, link_ok);
         return;
     }
 
-    if (!ble_connected || (g_kk_tel.last_pkt_ms > 0 && pkt_age >= KK_RX_FS_TEL_LOST_MS)) {
-        ht_enter_failsafe(cfg);
-        ht_failsafe_step(cfg, elapsed_ms, link_ok);
+    if (!ble_connected) {
+        ht_enter_failsafe(cfg, true);
+        return;
+    }
+    if (g_kk_tel.last_pkt_ms > 0 && pkt_age >= KK_RX_FS_TEL_LOST_MS) {
+        ht_enter_failsafe(cfg, true);
         return;
     }
     if (pkt_age >= KK_RX_FS_STALE_HOLD_MS) {

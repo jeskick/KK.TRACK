@@ -27,6 +27,7 @@ typedef struct {
 void kk_rx_ota_init(void);
 void kk_rx_ota_log_partitions(void);
 void kk_rx_ota_mark_boot_valid(void);
+void kk_rx_ota_poll_boot_confirm(uint32_t now_ms);
 const kk_ota_status_t *kk_rx_ota_status(void);
 bool kk_rx_ota_is_active(void);
 bool kk_rx_ota_is_tx_relay(void);

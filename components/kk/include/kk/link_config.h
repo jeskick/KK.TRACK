@@ -30,6 +30,10 @@
 #define KK_OTA_TX_STALL_MS         90000UL /* TX 侧无 chunk 则放弃 */
 #define KK_OTA_TX_FINISH_MS        45000UL /* 等 TX OTA,DONE 或断链 */
 #define KK_OTA_TX_IMAGE_MAX        1740800UL /* TWO_OTA_LARGE 单槽上限 */
+#define KK_OTA_IMAGE_MAGIC         0xE9U     /* ESP-IDF app image 首字节 */
+#define KK_OTA_RX_IMAGE_MIN        (32U * 1024U)
+#define KK_OTA_TX_IMAGE_MIN        (32U * 1024U)
+#define KK_OTA_BOOT_CONFIRM_MS     15000UL   /* 新镜像稳定运行后再 cancel rollback */
 #define KK_OTA_REBOOT_DELAY_MS     800UL
 
 #define KK_UDP_PORT              4210
@@ -121,11 +125,11 @@
 #define KK_BLE_REPAIR_CMD        "REPAIR"
 #define KK_BLE_CENTER_CMD        "CENTER"
 
-/* RX 失控保护：遥测丢失 / BLE 断连 → PPM 回 offset 个体中位并保持 */
-#define KK_RX_FS_TEL_LOST_MS     5000UL  /* WiFi+BLE 共存；仅真正断链才 failsafe */
+/* RX 失控保护：正常使用不开 WiFi；断连或遥测停 → 立刻回 offset 中位 */
+#define KK_RX_FS_TEL_LOST_MS     1200UL  /* 遥测丢失（TX 死机/假连接）；50Hz 下约 60 帧无包 */
 #define KK_RX_FS_STALE_HOLD_MS   800UL   /* 短间隙保持上一帧，不回中 */
 #define KK_RX_FS_RECOVER_MS      300UL   /* 恢复跟踪前需连续有效遥测 */
-#define KK_RX_FS_RAMP_MS         220UL   /* 回中过渡，与移动检测一致 */
+#define KK_RX_FS_RAMP_MS         220UL   /* 遗留：失控已改 snap，保留供 ht_failsafe_step */
 
 /* L0 舵机物理规格（RX servo_follow 速度上限来源） */
 #define KK_SERVO_SEC_PER_60          0.12f

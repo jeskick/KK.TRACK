@@ -26,8 +26,6 @@ static const char *TAG = "kk.ota.tx";
 
 #define KK_TX_OTA_RX_CAP       16384U
 #define KK_TX_OTA_DRAIN_MAX    4096U
-#define KK_TX_OTA_IMAGE_MAGIC  0xE9U
-#define KK_TX_OTA_IMAGE_MIN    (32U * 1024U)
 
 static portMUX_TYPE s_ota_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -48,6 +46,8 @@ static uint32_t s_stall_ms;
 static size_t s_stall_last;
 static uint8_t s_log_pct;
 static bool s_magic_checked;
+static bool s_boot_confirmed;
+static uint32_t s_boot_ms;
 static kk_tx_ota_signal_fn s_signal_fn;
 
 static void kk_tx_ota_reboot_task(void *arg)
@@ -80,7 +80,7 @@ static bool kk_tx_ota_check_magic(const uint8_t *data, size_t len)
     if (!data || len == 0) {
         return false;
     }
-    if (data[0] != KK_TX_OTA_IMAGE_MAGIC) {
+    if (data[0] != KK_OTA_IMAGE_MAGIC) {
         ESP_LOGW(TAG, "OTA bad image magic 0x%02x", (unsigned)data[0]);
         return false;
     }
@@ -177,6 +177,8 @@ void kk_tx_ota_init(void)
     s_stall_last = 0;
     s_log_pct = 0;
     s_magic_checked = false;
+    s_boot_confirmed = false;
+    s_boot_ms = kk_millis();
 }
 
 void kk_tx_ota_log_partitions(void)
@@ -206,6 +208,26 @@ void kk_tx_ota_mark_boot_valid(void)
         esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
         ESP_LOGW(TAG, "mark boot valid rc=%d", (int)err);
     }
+}
+
+void kk_tx_ota_poll_boot_confirm(uint32_t now_ms)
+{
+    if (s_boot_confirmed) {
+        return;
+    }
+    if (s_active) {
+        return;
+    }
+    if (s_boot_ms == 0 || now_ms < s_boot_ms) {
+        s_boot_ms = now_ms;
+        return;
+    }
+    if ((now_ms - s_boot_ms) < KK_OTA_BOOT_CONFIRM_MS) {
+        return;
+    }
+    kk_tx_ota_mark_boot_valid();
+    s_boot_confirmed = true;
+    ESP_LOGW(TAG, "boot confirm after %lums", (unsigned long)KK_OTA_BOOT_CONFIRM_MS);
 }
 
 bool kk_tx_ota_is_active(void)
@@ -239,9 +261,9 @@ esp_err_t kk_tx_ota_begin(size_t size)
         ESP_LOGW(TAG, "OTA begin rejected (busy)");
         return ESP_ERR_INVALID_STATE;
     }
-    if (size < KK_TX_OTA_IMAGE_MIN || size > KK_OTA_TX_IMAGE_MAX) {
+    if (size < KK_OTA_TX_IMAGE_MIN || size > KK_OTA_TX_IMAGE_MAX) {
         ESP_LOGW(TAG, "OTA bad size %u (min %u max %u)", (unsigned)size,
-                 (unsigned)KK_TX_OTA_IMAGE_MIN, (unsigned)KK_OTA_TX_IMAGE_MAX);
+                 (unsigned)KK_OTA_TX_IMAGE_MIN, (unsigned)KK_OTA_TX_IMAGE_MAX);
         return ESP_ERR_INVALID_SIZE;
     }
     s_part = esp_ota_get_next_update_partition(NULL);
@@ -443,7 +465,7 @@ bool kk_tx_ota_link_cmd(const uint8_t *data, uint16_t len)
 
     unsigned size = 0;
     if (strncmp(line, "OTA,START,", 10) == 0) {
-        if (sscanf(line, "OTA,START,%u", &size) != 1 || size < KK_TX_OTA_IMAGE_MIN ||
+        if (sscanf(line, "OTA,START,%u", &size) != 1 || size < KK_OTA_TX_IMAGE_MIN ||
             size > KK_OTA_TX_IMAGE_MAX) {
             return false;
         }

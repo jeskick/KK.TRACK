@@ -141,9 +141,10 @@ static esp_err_t ota_stream_run(httpd_req_t *req, bool target_tx, char *out, siz
 
     const size_t total = req->content_len;
     const size_t max_bytes = target_tx ? (size_t)KK_OTA_TX_IMAGE_MAX : kk_rx_ota_max_image_bytes();
-    if (total == 0 || total > max_bytes) {
-        snprintf(out, out_cap, "{\"ok\":false,\"err\":\"size\",\"max\":%u}",
-                 (unsigned)max_bytes);
+    const size_t min_bytes = target_tx ? (size_t)KK_OTA_TX_IMAGE_MIN : (size_t)KK_OTA_RX_IMAGE_MIN;
+    if (total == 0 || total > max_bytes || total < min_bytes) {
+        snprintf(out, out_cap, "{\"ok\":false,\"err\":\"size\",\"min\":%u,\"max\":%u}",
+                 (unsigned)min_bytes, (unsigned)max_bytes);
         return ESP_OK;
     }
 
