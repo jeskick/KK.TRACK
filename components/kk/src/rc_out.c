@@ -15,14 +15,18 @@ static const char *TAG = "kk.rc_out";
 static kk_rc_proto_t s_proto = KK_RC_PROTO_PPM;
 static bool s_running;
 static uint16_t s_ch_us[KK_RC_CH_COUNT];
+static uint16_t s_ch_frame[KK_RC_CH_COUNT];
+static bool s_failsafe;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static uart_port_t s_uart = UART_NUM_1;
 static esp_timer_handle_t s_serial_timer;
+static bool s_uart_on;
 
 static uint16_t kk_rc_us_to_serial(uint16_t us)
 {
-    float v = ((float)us - 988.0f) / 0.625f + 172.0f;
+    /* Betaflight/CRSF：992↔1500µs 严格对中，避免 SBUS 与 PPM 中位偏差 */
+    float v = 992.0f + ((float)us - 1500.0f) / 0.625f;
     if (v < 172.0f) {
         v = 172.0f;
     }
@@ -63,7 +67,7 @@ static void kk_rc_serial_channels(uint16_t vals[16])
 {
     portENTER_CRITICAL(&s_mux);
     for (int i = 0; i < KK_RC_CH_COUNT; i++) {
-        vals[i] = kk_rc_us_to_serial(s_ch_us[i]);
+        vals[i] = kk_rc_us_to_serial(s_ch_frame[i]);
     }
     portEXIT_CRITICAL(&s_mux);
     for (int i = KK_RC_CH_COUNT; i < 16; i++) {
@@ -81,20 +85,21 @@ static void kk_rc_send_sbus(void)
     uint8_t frame[25];
     frame[0] = 0x0F;
     memcpy(&frame[1], packed, 22);
-    frame[23] = 0;
+    frame[23] = s_failsafe ? 0x0CU : 0U; /* bit2 frame lost + bit3 failsafe */
     frame[24] = 0;
     uart_write_bytes(s_uart, (const char *)frame, sizeof(frame));
 }
 
 static void kk_rc_send_crsf(void)
 {
+    /* 单向输出：仅向飞控发送 RC_CHANNELS_PACKED(0x16)，不接收遥测/回传 */
     uint16_t vals[16];
     uint8_t packed[22];
     kk_rc_serial_channels(vals);
     kk_rc_pack_11bit(vals, packed);
 
     uint8_t frame[26];
-    frame[0] = 0xEE;
+    frame[0] = KK_CRSF_ADDR_FC;
     frame[1] = 24;
     frame[2] = 0x16;
     memcpy(&frame[3], packed, 22);
@@ -122,7 +127,10 @@ static void kk_rc_serial_stop(void)
         esp_timer_delete(s_serial_timer);
         s_serial_timer = NULL;
     }
-    uart_driver_delete(s_uart);
+    if (s_uart_on) {
+        uart_driver_delete(s_uart);
+        s_uart_on = false;
+    }
 }
 
 static esp_err_t kk_rc_serial_begin(kk_rc_proto_t proto)
@@ -140,11 +148,18 @@ static esp_err_t kk_rc_serial_begin(kk_rc_proto_t proto)
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
     };
-    ESP_ERROR_CHECK(uart_driver_install(s_uart, 256, 0, 0, NULL, 0));
+    /* ESP-IDF 要求 rx_buffer>0；TX-only 仍分配最小 RX 并 flush，不读回 */
+    esp_err_t err = uart_driver_install(s_uart, 256, 256, 0, NULL, 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "uart install fail %d", (int)err);
+        return err;
+    }
+    s_uart_on = true;
     ESP_ERROR_CHECK(uart_param_config(s_uart, &cfg));
     ESP_ERROR_CHECK(uart_set_pin(s_uart, PIN_PPM, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE,
                                  UART_PIN_NO_CHANGE));
     ESP_ERROR_CHECK(uart_set_line_inverse(s_uart, UART_SIGNAL_TXD_INV));
+    uart_flush_input(s_uart);
 
     const int64_t period_us = proto == KK_RC_PROTO_SBUS ? 9000 : 4000;
     const esp_timer_create_args_t targs = {
@@ -198,14 +213,21 @@ void kk_rc_out_begin(kk_rc_proto_t proto)
 
     for (int i = 0; i < KK_RC_CH_COUNT; i++) {
         s_ch_us[i] = KK_RX_PPM_CENTER;
+        s_ch_frame[i] = KK_RX_PPM_CENTER;
     }
 
     if (proto == KK_RC_PROTO_PPM) {
         kk_ppm_begin();
         ESP_LOGW(TAG, "PPM gpio=%d", PIN_PPM);
     } else {
-        kk_rc_serial_begin(proto);
-        ESP_LOGW(TAG, "%s uart tx gpio=%d", proto == KK_RC_PROTO_SBUS ? "SBUS" : "CRSF", PIN_PPM);
+        if (kk_rc_serial_begin(proto) != ESP_OK) {
+            ESP_LOGE(TAG, "serial begin fail -> PPM fallback gpio=%d", PIN_PPM);
+            s_proto = KK_RC_PROTO_PPM;
+            kk_ppm_begin();
+        } else {
+            ESP_LOGW(TAG, "%s uart tx-only gpio=%d",
+                     proto == KK_RC_PROTO_SBUS ? "SBUS" : "CRSF(TX only)", PIN_PPM);
+        }
     }
     s_running = true;
 }
@@ -238,10 +260,14 @@ void kk_rc_out_commit(void)
     }
     portENTER_CRITICAL(&s_mux);
     for (int i = 0; i < KK_RC_CH_COUNT; i++) {
-        /* serial path reads s_ch_us directly on timer */
-        (void)s_ch_us[i];
+        s_ch_frame[i] = s_ch_us[i];
     }
     portEXIT_CRITICAL(&s_mux);
+}
+
+void kk_rc_out_set_failsafe(bool active)
+{
+    s_failsafe = active;
 }
 
 uint16_t kk_rc_out_get_channel(uint8_t index)

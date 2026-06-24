@@ -66,7 +66,7 @@
 #define KK_DBG_DECOUPLE_MS       50u   /* 解耦分析流周期(ms)，比通用流更快以抓瞬态耦合 */
 #define KK_DBG_POSE              0     /* TX/RX: 姿态/舵机输出实时流 */
 #define KK_DBG_DECOUPLE          0     /* TX: 轴解耦链路全量(raw/geo/out/gyro/sup) */
-#define KK_DBG_MOTION            1     /* TX: 移动检测每拍判据(body/ho/nod/lin/st/trg/set) */
+#define KK_DBG_MOTION            0     /* TX: 移动检测每拍判据(body/ho/nod/lin/st/trg/set) */
 #define KK_DBG_LINK              0     /* RX: 遥测节拍/链路新鲜度 */
 
 /*
@@ -137,22 +137,22 @@
 #define KK_MOB_GYRO_BODY_TOTAL_DPS      95.0f
 #define KK_MOB_GYRO_BODY_ROLL_DPS       32.0f
 #define KK_MOB_GYRO_BODY_ROLL_SHARE     0.38f  /* roll 路径：roll 须为陀螺主导分量，排除转头耦合 */
-#define KK_MOB_ROT_LIN_K                0.38f  /* 扣除转头假加速度( pitch+yaw 合成角速率 ) */
-#define KK_MOB_LIN_ACCEL_MPS2           3.5f   /* 平移线加速度硬阈(已扣 rot 后) */
-#define KK_MOB_LIN_ACCEL_SOFT_MPS2      1.6f
-#define KK_MOB_HEAD_ACTIVE_DPS          28.0f  /* 单轴角速率超此视为正在转头/点头 */
-#define KK_MOB_HEAD_PAIR_DPS            42.0f  /* pitch+yaw 合成角速率(双轴同时动) */
-#define KK_MOB_WALK_LT_MIN              4.8f   /* 头在动时仍放行：脚步/平移够大 */
-#define KK_MOB_GRAV_MAX_HEAD_DPS        45.0f  /* 重力判站/坐时头轴不应在快速转 */
-#define KK_MOB_POSTURE_LT_MIN           2.5f   /* 站/坐：平移+重力联合下限 */
-#define KK_MOB_TRIGGER_HARD_MS          300UL  /* 硬平移(lt≥硬阈)时更快触发 */
+#define KK_MOB_ROT_LIN_K                0.50f  /* 扣除转头假加速度( pitch+yaw 合成角速率 ) */
+#define KK_MOB_LIN_ACCEL_MPS2           3.8f   /* 平移线加速度硬阈(已扣 rot 后) */
+#define KK_MOB_LIN_ACCEL_SOFT_MPS2      1.8f
+#define KK_MOB_HEAD_ACTIVE_DPS          24.0f  /* 单轴角速率超此视为正在转头/点头 */
+#define KK_MOB_HEAD_PAIR_DPS            38.0f  /* pitch+yaw 合成角速率(双轴同时动) */
+#define KK_MOB_WALK_LT_MIN              5.5f   /* 头静止时：脚步/平移硬阈 */
+#define KK_MOB_GRAV_MAX_HEAD_DPS        40.0f  /* 重力判站/坐时头轴不应在快速转 */
+#define KK_MOB_POSTURE_LT_MIN           2.8f   /* 站/坐：平移+重力联合下限 */
+#define KK_MOB_TRIGGER_HARD_MS          360UL  /* 硬平移(lt≥硬阈)时更快触发 */
 #define KK_MOB_TRIGGER_HARD_MUL         2U     /* 硬平移时触发计时倍率 */
 #define KK_MOB_GRAV_TILT_DEG            18.0f  /* 逻辑系重力相对基线倾角→站/坐/大位移 */
 #define KK_MOB_GRAV_BASE_EMA            0.035f /* 静止时重力基线慢跟踪 */
-#define KK_MOB_GRAV_BASE_FREEZE_DPS     22.0f  /* 头在动时冻结重力基线，防 gt 随转头虚增 */
+#define KK_MOB_GRAV_BASE_FREEZE_DPS     20.0f  /* 头在动时冻结重力基线，防 gt 随转头虚增 */
 #define KK_MOB_LIN_EMA_NEW              0.28f
 #define KK_MOB_LIN_PEAK_DECAY           0.92f
-#define KK_MOB_TRIGGER_MS               620UL
+#define KK_MOB_TRIGGER_MS               720UL
 #define KK_MOB_TRIGGER_DECAY_DIV        2U      /* 触发计时慢衰减，避免单帧漏检清零 */
 #define KK_MOB_SETTLE_MS                1500UL
 #define KK_MOB_SETTLE_DECAY_DIV         2U      /* 静止计时遇扰动慢减，不一次清零 */

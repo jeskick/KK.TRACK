@@ -99,6 +99,10 @@ static void led_update(void)
     in.func_prepare = s_ble_on && !in.func_ok && in.err_code == KK_GCODE_NONE;
 
     kk_led_apply(PIN_LED_BLUE, PIN_LED_GREEN, &in, &s_led_code);
+
+    if (s_ppm_on) {
+        kk_rc_out_set_failsafe(in.err_code == KK_GCODE_NO_DATA);
+    }
 }
 
 static void repair_enter(bool notify_peer)

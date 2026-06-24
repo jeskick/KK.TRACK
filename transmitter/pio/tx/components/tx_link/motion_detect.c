@@ -177,14 +177,16 @@ static bool kk_mob_body_motion(float g_pitch, float g_yaw, float g_roll, int8_t 
     }
 
     if (head_active) {
-        if (lin_trans >= KK_MOB_WALK_LT_MIN) {
-            return true;
-        }
+        /* 转头/点头期间不向心 lt 放行；仅站/坐(重力+慢头)可触发 */
         if (grav_tilt >= KK_MOB_GRAV_TILT_DEG && lin_trans >= KK_MOB_POSTURE_LT_MIN &&
             horiz < KK_MOB_GRAV_MAX_HEAD_DPS) {
             return true;
         }
         return false;
+    }
+
+    if (lin_trans >= KK_MOB_WALK_LT_MIN) {
+        return true;
     }
 
     if (kk_mob_head_nod(g_pitch, g_yaw, lin_metric) && lin_trans < KK_MOB_LIN_ACCEL_SOFT_MPS2) {
