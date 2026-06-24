@@ -5,6 +5,7 @@
 
 #include "kk/gesture_cfg.h"
 #include "kk/imu_mount.h"
+#include "kk/rc_out.h"
 #include "kk/tx_track_cfg.h"
 
 #define KK_RX_CH_MIN         5
@@ -43,6 +44,7 @@ typedef struct {
 } kk_yaw_servo_t;
 
 typedef struct {
+    uint8_t rc_proto;
     uint8_t ch_lr;
     uint8_t ch_ud;
     int16_t offset_lr;

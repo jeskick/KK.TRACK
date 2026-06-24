@@ -72,13 +72,23 @@ static kk_ble_rx_event_cb_t s_on_telemetry;
 #define KK_BLE_RX_F_SAVE_PEER   (1u << 4)
 #define KK_BLE_RX_F_ADV_RESTART (1u << 5)
 #define KK_BLE_RX_F_TEL         (1u << 6)
+#define KK_BLE_RX_F_MOUNT       (1u << 7)
+#define KK_BLE_RX_F_GESTURE     (1u << 8)
+#define KK_BLE_RX_F_TRACK       (1u << 9)
 
 static portMUX_TYPE s_pending_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint32_t s_pending_flags;
 static char s_pending_peer_mac[24];
+/* 配置同步缓存：网页(httpd 任务)只缓存+置标志，实际 BLE notify 在主循环 poll 发 */
+static kk_imu_mount_t s_pending_mount;
+static kk_gesture_cfg_t s_pending_gesture;
+static kk_tx_track_cfg_t s_pending_track;
 
 static esp_err_t kk_ble_rx_ota_send_one_chunk(void);
 static bool kk_ble_rx_notify_link(const char *msg);
+static void kk_ble_rx_send_mount_now(const kk_imu_mount_t *mount);
+static void kk_ble_rx_send_gesture_now(const kk_gesture_cfg_t *cfg);
+static void kk_ble_rx_send_track_now(const kk_tx_track_cfg_t *cfg);
 
 static void kk_ble_rx_ota_poll_tasks(void)
 {
@@ -188,12 +198,18 @@ void kk_ble_rx_poll(void)
 {
     uint32_t flags;
     char peer[24];
+    kk_imu_mount_t mount;
+    kk_gesture_cfg_t gesture;
+    kk_tx_track_cfg_t track;
 
     portENTER_CRITICAL(&s_pending_mux);
     flags = s_pending_flags;
     s_pending_flags = 0;
     strncpy(peer, s_pending_peer_mac, sizeof(peer) - 1);
     peer[sizeof(peer) - 1] = '\0';
+    mount = s_pending_mount;
+    gesture = s_pending_gesture;
+    track = s_pending_track;
     portEXIT_CRITICAL(&s_pending_mux);
 
     if (flags & KK_BLE_RX_F_DISCONNECT) {
@@ -229,6 +245,15 @@ void kk_ble_rx_poll(void)
         if (s_on_telemetry && !kk_rx_ota_is_active()) {
             s_on_telemetry();
         }
+    }
+    if (flags & KK_BLE_RX_F_MOUNT) {
+        kk_ble_rx_send_mount_now(&mount);
+    }
+    if (flags & KK_BLE_RX_F_GESTURE) {
+        kk_ble_rx_send_gesture_now(&gesture);
+    }
+    if (flags & KK_BLE_RX_F_TRACK) {
+        kk_ble_rx_send_track_now(&track);
     }
     kk_ble_rx_ota_poll_tasks();
 }
@@ -533,7 +558,7 @@ void kk_ble_rx_send_center(void)
     }
 }
 
-void kk_ble_rx_send_mount(const kk_imu_mount_t *mount)
+static void kk_ble_rx_send_mount_now(const kk_imu_mount_t *mount)
 {
     if (!mount || s_conn_handle == BLE_HS_CONN_HANDLE_NONE || s_link_val_handle == 0) {
         return;
@@ -551,7 +576,7 @@ void kk_ble_rx_send_mount(const kk_imu_mount_t *mount)
     }
 }
 
-void kk_ble_rx_send_gesture(const kk_gesture_cfg_t *cfg)
+static void kk_ble_rx_send_gesture_now(const kk_gesture_cfg_t *cfg)
 {
     if (!cfg || s_conn_handle == BLE_HS_CONN_HANDLE_NONE || s_link_val_handle == 0) {
         return;
@@ -566,7 +591,7 @@ void kk_ble_rx_send_gesture(const kk_gesture_cfg_t *cfg)
     }
 }
 
-void kk_ble_rx_send_track(const kk_tx_track_cfg_t *cfg)
+static void kk_ble_rx_send_track_now(const kk_tx_track_cfg_t *cfg)
 {
     if (!cfg || s_conn_handle == BLE_HS_CONN_HANDLE_NONE || s_link_val_handle == 0) {
         return;
@@ -579,6 +604,41 @@ void kk_ble_rx_send_track(const kk_tx_track_cfg_t *cfg)
         ble_gatts_notify_custom(s_conn_handle, s_link_val_handle, om);
         ESP_LOGW(TAG, "notify TX %s", buf);
     }
+}
+
+/* 公开 API：可能从 httpd 任务调用，故只缓存配置并置标志，
+ * 真正的 ble_gatts_notify 延迟到主循环 kk_ble_rx_poll() 执行，避免跨任务冲突。 */
+void kk_ble_rx_send_mount(const kk_imu_mount_t *mount)
+{
+    if (!mount) {
+        return;
+    }
+    portENTER_CRITICAL(&s_pending_mux);
+    s_pending_mount = *mount;
+    s_pending_flags |= KK_BLE_RX_F_MOUNT;
+    portEXIT_CRITICAL(&s_pending_mux);
+}
+
+void kk_ble_rx_send_gesture(const kk_gesture_cfg_t *cfg)
+{
+    if (!cfg) {
+        return;
+    }
+    portENTER_CRITICAL(&s_pending_mux);
+    s_pending_gesture = *cfg;
+    s_pending_flags |= KK_BLE_RX_F_GESTURE;
+    portEXIT_CRITICAL(&s_pending_mux);
+}
+
+void kk_ble_rx_send_track(const kk_tx_track_cfg_t *cfg)
+{
+    if (!cfg) {
+        return;
+    }
+    portENTER_CRITICAL(&s_pending_mux);
+    s_pending_track = *cfg;
+    s_pending_flags |= KK_BLE_RX_F_TRACK;
+    portEXIT_CRITICAL(&s_pending_mux);
 }
 
 static bool kk_ble_rx_notify_link(const char *msg)

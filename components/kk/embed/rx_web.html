@@ -62,6 +62,7 @@ h2{font-size:.88rem;margin:0 0 8px;color:#9aa7b8;font-weight:600}
 <div class="card">
 <h2>设置 <span class="msg" id="msg"></span></h2>
 <div class="line">
+<label>协议</label><select class="sel sel-y" id="rc_proto"></select>
 <label>YAW→CH</label><select class="sel" id="ch_lr"></select>
 <label>PITCH→CH</label><select class="sel" id="ch_ud"></select>
 </div>
@@ -155,6 +156,8 @@ function updScalePct(){
 }
 function loadCfg(d){
   loading=true;
+  fillSel($('rc_proto'),[0,1,2],d.rc_proto!=null?d.rc_proto:0,'');
+  $('rc_proto').options[0].textContent='PPM';$('rc_proto').options[1].textContent='SBUS';$('rc_proto').options[2].textContent='CRSF';
   fillSel($('ch_lr'),[5,6,7,8],d.ch_lr,'CH');
   fillSel($('ch_ud'),[5,6,7,8],d.ch_ud,'CH');
   $('off_lr').value=d.offset_lr;$('off_lr_s').value=d.offset_lr;
@@ -185,7 +188,7 @@ function fixCh(ch){
   if(lr.value!==ud.value)return;
   (ch==='ch_lr'?ud:lr).value=bumpCh(lr.value);
 }
-['ch_lr','ch_ud','yaw_servo','rev_lr','rev_ud','mount_horiz','mount_lr','mount_fb','gest_roll','track_dec','track_mob'].forEach(id=>{
+['rc_proto','ch_lr','ch_ud','yaw_servo','rev_lr','rev_ud','mount_horiz','mount_lr','mount_fb','gest_roll','track_dec','track_mob'].forEach(id=>{
   $(id).onchange=()=>{if(id==='ch_lr'||id==='ch_ud')fixCh(id);scheduleSave();};
 });
 function bindSliders(){
@@ -201,6 +204,7 @@ async function doSave(){
   if(loading)return;
   if(val('ch_lr','6')==val('ch_ud','7')){$('msg').textContent='通道冲突';return;}
   const p=new URLSearchParams();
+  p.set('rc_proto',val('rc_proto','0'));
   p.set('ch_lr',val('ch_lr','6'));p.set('ch_ud',val('ch_ud','7'));
   p.set('offset_lr',val('off_lr','0'));p.set('offset_ud',val('off_ud','0'));
   p.set('scale_lr',val('scale_lr_s','50'));p.set('scale_ud',val('scale_ud_s','50'));

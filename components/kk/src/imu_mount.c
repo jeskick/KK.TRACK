@@ -303,6 +303,62 @@ void kk_imu_mount_gyro_to_logic(const kk_imu_mount_t *mount, float gx_dps,
     }
 }
 
+void kk_imu_mount_apply_geo(const kk_quat_t *q_now, const kk_quat_t *q_zero,
+                            const kk_imu_mount_t *mount, float *yaw_hold,
+                            float *yaw_deg, float *pitch_deg, float *roll_deg)
+{
+    if (!q_now || !q_zero) {
+        return;
+    }
+
+    kk_quat_t q_rel = kk_quat_mul(kk_quat_conj(*q_zero), *q_now);
+    const kk_quat_t q_mount = kk_imu_mount_quat(mount);
+    const kk_quat_t q_inv = kk_quat_conj(q_mount);
+    kk_quat_t q_logic = kk_quat_mul(kk_quat_mul(q_inv, q_rel), q_mount);
+
+    /* 头部前向轴 = 逻辑系 +Y；旋转后得朝向单位向量 f，yaw/pitch 为其球面角，与 roll 无关 */
+    float fx = 0.0f;
+    float fy = 0.0f;
+    float fz = 0.0f;
+    kk_quat_rotate_vec(q_logic, 0.0f, 1.0f, 0.0f, &fx, &fy, &fz);
+
+    float zc = fz;
+    if (zc > 1.0f) {
+        zc = 1.0f;
+    }
+    if (zc < -1.0f) {
+        zc = -1.0f;
+    }
+    float pitch = asinf(zc) * KK_RAD2DEG;
+
+    /* 朝向接近正上/正下时航向退化：保持上一帧 yaw，避免翻转抖动 */
+    const float horiz = sqrtf(fx * fx + fy * fy);
+    float yaw;
+    if (horiz < 0.087f) {
+        yaw = yaw_hold ? *yaw_hold : 0.0f;
+    } else {
+        yaw = atan2f(-fx, fy) * KK_RAD2DEG;
+        if (yaw_hold) {
+            *yaw_hold = yaw;
+        }
+    }
+
+    yaw = kk_imu_clamp_pose_deg(yaw);
+    pitch = kk_imu_clamp_pose_deg(pitch);
+
+    if (yaw_deg) {
+        *yaw_deg = kk_imu_wrap_deg(yaw);
+    }
+    if (pitch_deg) {
+        *pitch_deg = kk_imu_wrap_deg(pitch);
+    }
+    if (roll_deg) {
+        const kk_quat_t q_roll_tw = kk_quat_twist_about(q_logic, 0.0f, 1.0f, 0.0f);
+        const float roll = kk_quat_twist_deg(q_roll_tw, 0.0f, 1.0f, 0.0f);
+        *roll_deg = kk_imu_wrap_deg(kk_imu_clamp_pose_deg(roll));
+    }
+}
+
 bool kk_mount_cmd_parse(const char *line, size_t len, kk_imu_mount_t *out)
 {
     if (!line || !out || len < 7) {

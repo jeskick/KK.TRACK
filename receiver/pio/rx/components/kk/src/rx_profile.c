@@ -1,4 +1,5 @@
 #include "kk/rx_profile.h"
+#include "kk/rc_out.h"
 #include "kk/imu_mount.h"
 #include "kk/link_config.h"
 #include "kk/tx_track_cfg.h"
@@ -9,6 +10,7 @@
 kk_rx_profile_t kk_rx_profile_defaults(void)
 {
     kk_rx_profile_t p = {
+        .rc_proto = KK_RC_PROTO_PPM,
         .ch_lr = 6,
         .ch_ud = 7,
         .offset_lr = -280,
@@ -117,6 +119,7 @@ void kk_rx_profile_sanitize(kk_rx_profile_t *p)
     if (!p) {
         return;
     }
+    p->rc_proto = kk_rc_out_sanitize_proto(p->rc_proto);
     p->ch_lr = kk_rx_clamp_ch(p->ch_lr);
     p->ch_ud = kk_rx_clamp_ch(p->ch_ud);
     if (p->ch_lr == p->ch_ud) {
@@ -249,6 +252,9 @@ void kk_rx_profile_load(kk_rx_profile_t *out)
     uint8_t v8;
     int16_t v16;
     uint8_t u8;
+    if (nvs_get_u8(h, "rc_proto", &v8) == ESP_OK) {
+        out->rc_proto = v8;
+    }
     if (nvs_get_u8(h, "ch_lr", &v8) == ESP_OK) {
         out->ch_lr = v8;
     }
@@ -325,6 +331,7 @@ void kk_rx_profile_save(const kk_rx_profile_t *cfg)
     if (nvs_open(KK_PREFS_RX_NS, NVS_READWRITE, &h) != ESP_OK) {
         return;
     }
+    nvs_set_u8(h, "rc_proto", p.rc_proto);
     nvs_set_u8(h, "ch_lr", p.ch_lr);
     nvs_set_u8(h, "ch_ud", p.ch_ud);
     nvs_set_i16(h, "off_lr", p.offset_lr);

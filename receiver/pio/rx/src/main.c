@@ -3,10 +3,11 @@
 
 #include "kk/board_rx.h"
 #include "kk/head_track.h"
+#include "kk/kk_log.h"
 #include "kk/led.h"
 #include "kk/link_config.h"
 #include "kk/repair.h"
-#include "kk/ppm.h"
+#include "kk/rc_out.h"
 #include "kk/rx_profile.h"
 #include "kk/rx_ota.h"
 #include "kk/tx_track_cfg.h"
@@ -58,8 +59,8 @@ static bool s_web_on;
 static bool s_web_pending;
 static bool s_ppm_on;
 static bool s_need_ppm;
+
 static bool s_need_link_down;
-static uint32_t s_hb_ms;
 static uint32_t s_ap_after_ms;
 static uint32_t s_tx_sync_next_ms;
 static uint8_t s_tx_sync_left;
@@ -126,7 +127,7 @@ static void repair_enter(bool notify_peer)
     s_need_ppm = false;
     s_ppm_on = false;
     kk_head_track_failsafe_reset();
-    kk_ppm_stop();
+    kk_rc_out_stop();
     if (s_web_on) {
         kk_rx_web_stop();
         s_web_on = false;
@@ -372,8 +373,7 @@ void app_main(void)
 {
     app_init();
     xTaskCreate(ble_init_task, "ble_init", 16384, NULL, 3, NULL);
-    ESP_LOGW(TAG, "[RX] main loop start");
-    s_hb_ms = kk_millis();
+    KK_EVT(TAG, "[RX] main loop start");
 
     while (1) {
         const uint32_t now = kk_millis();
@@ -391,11 +391,11 @@ void app_main(void)
 
         if (s_need_ppm) {
             s_need_ppm = false;
-            kk_ppm_begin();
+            kk_rc_out_begin((kk_rc_proto_t)g_profile.rc_proto);
             kk_head_track_failsafe_reset();
             kk_head_track_poll(&g_profile, s_ble_on, true, now);
             s_ppm_on = true;
-            ESP_LOGW(TAG, "PPM on");
+            ESP_LOGW(TAG, "RC out on proto=%u", (unsigned)g_profile.rc_proto);
             schedule_wifi_after_stable(now);
         }
 
@@ -463,17 +463,15 @@ void app_main(void)
 
         kk_rx_ota_poll_boot_confirm(now);
 
-        if (kk_diag_due(&s_hb_ms, KK_DIAG_LOG_MS)) {
-            if (s_ppm_on && s_ble_on && g_kk_tel.last_pkt_ms > 0) {
-                ESP_LOGW(TAG, "[RX] yaw=%d pitch=%d lr=%u ud=%u ble=%d fs=%d wifi=%d",
-                         (int)g_kk_ht.yaw_f, (int)g_kk_ht.pitch_f, g_kk_ht.ppm_lr,
-                         g_kk_ht.ppm_ud, s_ble_on, kk_head_track_failsafe_active(),
-                         kk_wifi_rx_is_on());
-            } else {
-                ESP_LOGW(TAG, "[RX] btn=%d ble=%d ppm=%d wifi=%d",
-                         gpio_get_level(PIN_BTN), s_ble_on, s_ppm_on, kk_wifi_rx_is_on());
-            }
-        }
+        /* 链路连接状态变化时打一条（边沿，不周期刷） */
+        KK_EVT_CHG(TAG, rx_ble, s_ble_on ? 1 : 0, "[BLE] %s", s_ble_on ? "connected" : "down");
+        /* 聚焦调试：把 KK_DBG_POSE / KK_DBG_LINK 置 1 重编译可开实时流（默认关，零开销） */
+        KK_DBG(KK_DBG_POSE, KK_DBG_STREAM_MS, TAG,
+               "[POSE] yaw=%d pitch=%d lr=%u ud=%u ble=%d fs=%d", (int)g_kk_ht.yaw_f,
+               (int)g_kk_ht.pitch_f, g_kk_ht.ppm_lr, g_kk_ht.ppm_ud, s_ble_on,
+               kk_head_track_failsafe_active());
+        KK_DBG(KK_DBG_LINK, KK_DBG_STREAM_MS, TAG, "[LINK] ble=%d ppm=%d wifi=%d last_pkt=%lu",
+               s_ble_on, s_ppm_on, kk_wifi_rx_is_on(), (unsigned long)g_kk_tel.last_pkt_ms);
 
         vTaskDelay(pdMS_TO_TICKS(kk_rx_ota_is_active() ? 2 : 20));
     }

@@ -1,5 +1,6 @@
 #include "kk/rx_ota.h"
 #include "kk/link_config.h"
+#include "kk/ota_image.h"
 #include "kk/time.h"
 
 #include "esp_log.h"
@@ -18,7 +19,7 @@ static esp_ota_handle_t s_handle;
 static size_t s_total;
 static size_t s_written;
 static bool s_open;
-static bool s_magic_checked;
+static kk_ota_img_check_t s_img;
 static bool s_boot_confirmed;
 static uint32_t s_boot_ms;
 static kk_rx_ota_tx_ops_t s_tx_ops;
@@ -74,22 +75,6 @@ static bool kk_ota_part_ok(const esp_partition_t *part)
     return true;
 }
 
-static bool kk_ota_check_magic(const uint8_t *data, size_t len)
-{
-    if (s_magic_checked || s_written > 0) {
-        return true;
-    }
-    if (!data || len == 0) {
-        return false;
-    }
-    if (data[0] != KK_OTA_IMAGE_MAGIC) {
-        ESP_LOGW(TAG, "OTA bad image magic 0x%02x", (unsigned)data[0]);
-        return false;
-    }
-    s_magic_checked = true;
-    return true;
-}
-
 void kk_rx_ota_init(void)
 {
     memset(&s_st, 0, sizeof(s_st));
@@ -98,7 +83,7 @@ void kk_rx_ota_init(void)
     s_total = 0;
     s_written = 0;
     s_open = false;
-    s_magic_checked = false;
+    kk_ota_img_check_reset(&s_img);
     s_boot_confirmed = false;
     s_boot_ms = kk_millis();
 }
@@ -198,7 +183,7 @@ static esp_err_t kk_ota_open(size_t size, kk_ota_phase_t phase)
         kk_ota_set(KK_OTA_ERR, 0, ESP_ERR_INVALID_SIZE, "size");
         return ESP_ERR_INVALID_SIZE;
     }
-    s_magic_checked = false;
+    kk_ota_img_check_reset(&s_img);
     esp_err_t err = esp_ota_begin(s_part, size, &s_handle);
     if (err != ESP_OK) {
         kk_ota_set(KK_OTA_ERR, 0, (int)err, "ota begin");
@@ -220,9 +205,10 @@ static esp_err_t kk_ota_write_chunk(const uint8_t *data, size_t len)
     if (!s_open || !data || len == 0) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (s_st.phase == KK_OTA_RX_LOCAL && !kk_ota_check_magic(data, len)) {
+    if (s_st.phase == KK_OTA_RX_LOCAL &&
+        kk_ota_img_check_feed(&s_img, data, len, KK_OTA_PROJ_RX) == KK_OTA_IMG_REJECT) {
         kk_ota_close_failed();
-        kk_ota_set(KK_OTA_ERR, s_st.pct, ESP_ERR_INVALID_ARG, "bad magic");
+        kk_ota_set(KK_OTA_ERR, s_st.pct, ESP_ERR_INVALID_ARG, "bad image");
         return ESP_ERR_INVALID_ARG;
     }
     if (s_written + len > s_total) {
@@ -232,6 +218,7 @@ static esp_err_t kk_ota_write_chunk(const uint8_t *data, size_t len)
     }
     esp_err_t err = esp_ota_write(s_handle, data, len);
     if (err != ESP_OK) {
+        kk_ota_close_failed();
         kk_ota_set(KK_OTA_ERR, s_st.pct, (int)err, "write");
         return err;
     }
@@ -260,7 +247,7 @@ static void kk_ota_close_failed(void)
     s_part = NULL;
     s_total = 0;
     s_written = 0;
-    s_magic_checked = false;
+    kk_ota_img_check_reset(&s_img);
 }
 
 static void kk_ota_reboot_task(void *arg)
@@ -353,6 +340,7 @@ esp_err_t kk_rx_ota_tx_begin(size_t size)
     s_open = true;
     s_part = NULL;
     s_handle = 0;
+    kk_ota_img_check_reset(&s_img);
     s_st.written = 0;
     s_st.total = (uint32_t)size;
     s_st.tx_pct = 0;
@@ -375,6 +363,18 @@ esp_err_t kk_rx_ota_tx_write(const uint8_t *data, size_t len)
 {
     if (!s_tx_ops.write || s_st.phase != KK_OTA_TX_RELAY) {
         return ESP_ERR_INVALID_STATE;
+    }
+    if (!data || len == 0) {
+        return ESP_OK;
+    }
+    if (s_written + len > s_total) {
+        kk_ota_set(KK_OTA_ERR, s_st.pct, ESP_ERR_INVALID_SIZE, "relay overflow");
+        return ESP_ERR_INVALID_SIZE;
+    }
+    /* 快速否决：上传到 /api/ota/tx 的必须是 TX 固件，避免把 RX 镜像中继给 TX */
+    if (kk_ota_img_check_feed(&s_img, data, len, KK_OTA_PROJ_TX) == KK_OTA_IMG_REJECT) {
+        kk_ota_set(KK_OTA_ERR, s_st.pct, ESP_ERR_INVALID_ARG, "tx bad image");
+        return ESP_ERR_INVALID_ARG;
     }
     esp_err_t err = s_tx_ops.write(data, len);
     if (err != ESP_OK) {

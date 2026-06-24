@@ -31,6 +31,10 @@
 #define KK_OTA_TX_FINISH_MS        45000UL /* 等 TX OTA,DONE 或断链 */
 #define KK_OTA_TX_IMAGE_MAX        1740800UL /* TWO_OTA_LARGE 单槽上限 */
 #define KK_OTA_IMAGE_MAGIC         0xE9U     /* ESP-IDF app image 首字节 */
+/* esp_app_desc 魔数与 CMake project() 名；用于首包校验，杜绝 RX/TX 固件刷反 */
+#define KK_OTA_APP_DESC_MAGIC      0xABCD5432U
+#define KK_OTA_PROJ_RX             "kk_rx"
+#define KK_OTA_PROJ_TX             "kk_tx"
 #define KK_OTA_RX_IMAGE_MIN        (32U * 1024U)
 #define KK_OTA_TX_IMAGE_MIN        (32U * 1024U)
 #define KK_OTA_BOOT_CONFIRM_MS     15000UL   /* 新镜像稳定运行后再 cancel rollback */
@@ -48,7 +52,22 @@
 #define KK_WIFI_JOIN_DELAY_MS    4000   /* RX 开 AP 后留给手机/网页 */
 #define KK_WIFI_JOIN_MS          12000
 #define KK_BLE_TEL_MS            20     /* TX→RX 遥测周期，与 PPM 50Hz 对齐 */
+#define KK_BLE_TEL_BACKOFF_MS    60     /* 遥测写入失败(链路拥塞)时的退避，给 BLE 缓冲排空 */
 #define KK_DIAG_LOG_MS           2000UL /* 状态日志周期；与遥测/PPM 解耦，不阻塞热路径 */
+
+/*
+ * ===== 调试日志主题开关（编译期，见 kk/kk_log.h）=====
+ * 平时全 0：运行时只输出"事件/状态变化"日志（链路、配对、PPM、WiFi、OTA、IMU 故障…），
+ * 一次变化一条，绝不周期刷屏，干净直观。要聚焦调试某功能时把对应主题置 1 重新编译，
+ * 该功能处会以 KK_DBG_STREAM_MS 为周期实时输出细节，调完置回 0。
+ * 正式版(release/nolog)已整体去日志，这些开关不影响正式版体积与性能。
+ */
+#define KK_DBG_STREAM_MS         100u  /* 实时调试流刷新周期(ms) */
+#define KK_DBG_DECOUPLE_MS       50u   /* 解耦分析流周期(ms)，比通用流更快以抓瞬态耦合 */
+#define KK_DBG_POSE              0     /* TX/RX: 姿态/舵机输出实时流 */
+#define KK_DBG_DECOUPLE          0     /* TX: 轴解耦链路全量(raw/geo/out/gyro/sup) */
+#define KK_DBG_MOTION            1     /* TX: 移动检测每拍判据(body/ho/nod/lin/st/trg/set) */
+#define KK_DBG_LINK              0     /* RX: 遥测节拍/链路新鲜度 */
 
 /*
  * 端到端信号链 — 各层职责分离，勿在错误层做限速：
@@ -94,16 +113,46 @@
 #define KK_DEC_INTENT_DEG_MIN           0.10f
 #define KK_DEC_DOM_SPAN                 0.22f
 
-/* TX 移动检测（走路/大动作 → hold + 静止自动置零） */
-#define KK_MOB_GYRO_HEAD_DOM_SHARE      0.62f
+/*
+ * 几何法之上的跨轴干扰过滤（变增益“误差低通”，仅 KK_IMU_DECOUPLE_GEOMETRIC=1 时启用）：
+ * 解决“主观转头(yaw)时俯仰(pitch)跟着动、反之亦然”的物理交叉耦合（头戴轴向不固定所致）。
+ * 思路：每轴以系数 k 向几何真值收敛——主观驱动轴 k≈1 全跟手；当“对侧”陀螺占比超过
+ * dom 阈值时，本轴 k 被压低（按 UI strength），把短暂的耦合冲动滤掉。总角速率低于
+ * ACT_MIN(静止)时两轴 k→1，输出收敛到真值，零静态滞后、无冻结漂移（保持丝滑稳定）。
+ * dom 阈值与 strength 复用网页 decouple_dom_x10 / decouple_str_x100。
+ */
+#define KK_XDEC_ACT_MIN_DPS            12.0f  /* 总角速率(dps)低于此视为静止/微动，不抑制(抬高以抑低速主导翻转抖动) */
+#define KK_XDEC_DOM_SPAN               0.22f  /* 主导占比 smoothstep 跨度 */
+#define KK_XDEC_SUP_ATTACK             0.45f  /* 抑制渐强：快，及时挡住起步耦合 */
+#define KK_XDEC_SUP_RELEASE            0.12f  /* 抑制渐弱：慢，避免主导切换时闪烁 */
+#define KK_XDEC_K_MIN                  0.03f  /* (旧模型遗留，绝对保持模型已不用) */
+#define KK_XDEC_REF_FREE               0.15f  /* 抑制量低于此视为该轴"自由"，持续锁存几何真值为参照 */
+#define KK_XDEC_REL_HOLD_MS            160u   /* 释放保持窗：换向时两轴速度同时过零会瞬时跌破 ACT_MIN，
+                                              * 此窗内维持上一拍抑制目标(不松开/不重锁 ref)，桥过速度凹陷消除换向毛刺；
+                                              * 仅真正持续静止超过此窗才放行，收敛回真值(零静态滞后)。 */
+
+/* TX 移动检测（走路/ sudden 位移 → hold + 静止自动置零；头部大角度转/点不触发） */
+#define KK_MOB_GYRO_HEAD_DOM_SHARE      0.62f  /* yaw/pitch 陀螺占比超此视为头部主观运动，一律豁免 */
 #define KK_MOB_GYRO_BODY_AXIS_DPS       52.0f
 #define KK_MOB_GYRO_BODY_TOTAL_DPS      95.0f
 #define KK_MOB_GYRO_BODY_ROLL_DPS       32.0f
-#define KK_MOB_LIN_ACCEL_MPS2           3.2f
-#define KK_MOB_LIN_ACCEL_SOFT_MPS2      1.4f
+#define KK_MOB_GYRO_BODY_ROLL_SHARE     0.38f  /* roll 路径：roll 须为陀螺主导分量，排除转头耦合 */
+#define KK_MOB_ROT_LIN_K                0.38f  /* 扣除转头假加速度( pitch+yaw 合成角速率 ) */
+#define KK_MOB_LIN_ACCEL_MPS2           3.5f   /* 平移线加速度硬阈(已扣 rot 后) */
+#define KK_MOB_LIN_ACCEL_SOFT_MPS2      1.6f
+#define KK_MOB_HEAD_ACTIVE_DPS          28.0f  /* 单轴角速率超此视为正在转头/点头 */
+#define KK_MOB_HEAD_PAIR_DPS            42.0f  /* pitch+yaw 合成角速率(双轴同时动) */
+#define KK_MOB_WALK_LT_MIN              4.8f   /* 头在动时仍放行：脚步/平移够大 */
+#define KK_MOB_GRAV_MAX_HEAD_DPS        45.0f  /* 重力判站/坐时头轴不应在快速转 */
+#define KK_MOB_POSTURE_LT_MIN           2.5f   /* 站/坐：平移+重力联合下限 */
+#define KK_MOB_TRIGGER_HARD_MS          300UL  /* 硬平移(lt≥硬阈)时更快触发 */
+#define KK_MOB_TRIGGER_HARD_MUL         2U     /* 硬平移时触发计时倍率 */
+#define KK_MOB_GRAV_TILT_DEG            18.0f  /* 逻辑系重力相对基线倾角→站/坐/大位移 */
+#define KK_MOB_GRAV_BASE_EMA            0.035f /* 静止时重力基线慢跟踪 */
+#define KK_MOB_GRAV_BASE_FREEZE_DPS     22.0f  /* 头在动时冻结重力基线，防 gt 随转头虚增 */
 #define KK_MOB_LIN_EMA_NEW              0.28f
 #define KK_MOB_LIN_PEAK_DECAY           0.92f
-#define KK_MOB_TRIGGER_MS               480UL
+#define KK_MOB_TRIGGER_MS               620UL
 #define KK_MOB_TRIGGER_DECAY_DIV        2U      /* 触发计时慢衰减，避免单帧漏检清零 */
 #define KK_MOB_SETTLE_MS                1500UL
 #define KK_MOB_SETTLE_DECAY_DIV         2U      /* 静止计时遇扰动慢减，不一次清零 */
@@ -149,3 +198,12 @@
 /* |Roll| 接近垂直：欧拉奇异区，不启动新手势 */
 #define KK_IMU_GIMBAL_ROLL_DEG         55.0f
 #define KK_IMU_POSE_CLAMP_DEG          90.0f
+
+/*
+ * 轴解耦算法选择（TX，编译期）：
+ *   1 = 几何法：由头部前向轴朝向向量直接求 yaw/pitch，天生与 roll 无关、
+ *       全姿态连续（无 55° 奇异跳变），不累积漂移。推荐。
+ *   0 = 旧版：欧拉角 + 陀螺主导启发式抑制（imu_decouple.c）。保留以便随时回退对比。
+ * 网页 decouple 开关含义：开=应用几何解耦；关=输出原始欧拉角（耦合，便于对比）。
+ */
+#define KK_IMU_DECOUPLE_GEOMETRIC      1

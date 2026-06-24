@@ -1,6 +1,7 @@
 #include "kk/head_track.h"
 #include "kk/link_config.h"
 #include "kk/ppm.h"
+#include "kk/rc_out.h"
 #include "kk/rx_ota.h"
 #include "kk/servo_follow.h"
 #include "kk/telemetry.h"
@@ -72,10 +73,12 @@ static void ht_write_ppm(const kk_rx_profile_t *cfg, uint16_t lr, uint16_t ud)
 {
     g_kk_ht.ppm_lr = lr;
     g_kk_ht.ppm_ud = ud;
-    kk_ppm_set_channel(kk_rx_ch_to_index(cfg->ch_lr), lr);
-    kk_ppm_set_channel(kk_rx_ch_to_index(cfg->ch_ud), ud);
-    kk_ppm_commit();
+    kk_rc_out_set_channel(kk_rx_ch_to_index(cfg->ch_lr), lr);
+    kk_rc_out_set_channel(kk_rx_ch_to_index(cfg->ch_ud), ud);
+    kk_rc_out_commit();
 }
+
+static uint32_t ht_pkt_age_ms(uint32_t now_ms);
 
 static bool ht_link_ok(bool ble_connected, uint32_t now_ms)
 {
@@ -85,7 +88,7 @@ static bool ht_link_ok(bool ble_connected, uint32_t now_ms)
     if (g_kk_tel.last_pkt_ms == 0) {
         return false;
     }
-    return (now_ms - g_kk_tel.last_pkt_ms) < KK_RX_FS_TEL_LOST_MS;
+    return ht_pkt_age_ms(now_ms) < KK_RX_FS_TEL_LOST_MS;
 }
 
 static uint32_t ht_pkt_age_ms(uint32_t now_ms)
@@ -93,7 +96,11 @@ static uint32_t ht_pkt_age_ms(uint32_t now_ms)
     if (g_kk_tel.last_pkt_ms == 0) {
         return UINT32_MAX;
     }
-    return now_ms - g_kk_tel.last_pkt_ms;
+    /* last_pkt_ms 由 BLE 主机任务在回调里写入；它可能比主循环本轮抓取的 now_ms
+     * 略新(跨任务读到更晚的 kk_millis())。用有符号差判断，last 领先时视为最新(age=0)，
+     * 杜绝 now-last 在 uint32 下溢成天文数字而误触发 TEL_LOST 假回中。 */
+    int32_t age = (int32_t)(now_ms - g_kk_tel.last_pkt_ms);
+    return age < 0 ? 0u : (uint32_t)age;
 }
 
 static void ht_hold_last_ppm(const kk_rx_profile_t *cfg)
@@ -102,9 +109,9 @@ static void ht_hold_last_ppm(const kk_rx_profile_t *cfg)
     float pitch = cfg->rev_ud ? -g_kk_ht.pitch_f : g_kk_ht.pitch_f;
     g_kk_ht.ppm_lr = kk_rx_yaw_angle_to_us(yaw, cfg->offset_lr, cfg->yaw_servo_deg, cfg->scale_lr);
     g_kk_ht.ppm_ud = kk_rx_angle_to_us(pitch, cfg->offset_ud, cfg->scale_ud);
-    kk_ppm_set_channel(kk_rx_ch_to_index(cfg->ch_lr), g_kk_ht.ppm_lr);
-    kk_ppm_set_channel(kk_rx_ch_to_index(cfg->ch_ud), g_kk_ht.ppm_ud);
-    kk_ppm_commit();
+    kk_rc_out_set_channel(kk_rx_ch_to_index(cfg->ch_lr), g_kk_ht.ppm_lr);
+    kk_rc_out_set_channel(kk_rx_ch_to_index(cfg->ch_ud), g_kk_ht.ppm_ud);
+    kk_rc_out_commit();
 }
 
 static void ht_output_offset_center(const kk_rx_profile_t *cfg)
@@ -124,7 +131,6 @@ static void ht_enter_failsafe(const kk_rx_profile_t *cfg, bool snap)
     if (snap) {
         s_fs_state = HT_FS_HOLD;
         ht_output_offset_center(cfg);
-        ESP_LOGW(TAG, "BLE down -> offset center snap");
         return;
     }
     s_fs_from_lr = g_kk_ht.ppm_lr;
@@ -221,10 +227,10 @@ void kk_head_track_center(const kk_rx_profile_t *cfg)
         return;
     }
     const kk_yaw_servo_t yaw_srv = kk_rx_yaw_servo_params(cfg->yaw_servo_deg);
-    kk_ppm_fill_center();
-    kk_ppm_set_channel(kk_rx_ch_to_index(cfg->ch_lr), yaw_srv.center_us);
-    kk_ppm_set_channel(kk_rx_ch_to_index(cfg->ch_ud), KK_RX_PPM_CENTER);
-    kk_ppm_commit();
+    kk_rc_out_fill_center();
+    kk_rc_out_set_channel(kk_rx_ch_to_index(cfg->ch_lr), yaw_srv.center_us);
+    kk_rc_out_set_channel(kk_rx_ch_to_index(cfg->ch_ud), KK_RX_PPM_CENTER);
+    kk_rc_out_commit();
 }
 
 void kk_head_track_offset_center(const kk_rx_profile_t *cfg)
@@ -250,9 +256,9 @@ void kk_head_track_apply(const kk_rx_profile_t *cfg)
     g_kk_ht.ppm_lr = kk_rx_yaw_angle_to_us(yaw, cfg->offset_lr, cfg->yaw_servo_deg, cfg->scale_lr);
     g_kk_ht.ppm_ud = kk_rx_angle_to_us(pitch, cfg->offset_ud, cfg->scale_ud);
 
-    kk_ppm_set_channel(kk_rx_ch_to_index(cfg->ch_lr), g_kk_ht.ppm_lr);
-    kk_ppm_set_channel(kk_rx_ch_to_index(cfg->ch_ud), g_kk_ht.ppm_ud);
-    kk_ppm_commit();
+    kk_rc_out_set_channel(kk_rx_ch_to_index(cfg->ch_lr), g_kk_ht.ppm_lr);
+    kk_rc_out_set_channel(kk_rx_ch_to_index(cfg->ch_ud), g_kk_ht.ppm_ud);
+    kk_rc_out_commit();
 }
 
 void kk_head_track_poll(const kk_rx_profile_t *cfg, bool ble_connected, bool ppm_active,
@@ -301,10 +307,14 @@ void kk_head_track_poll(const kk_rx_profile_t *cfg, bool ble_connected, bool ppm
     }
 
     if (!ble_connected) {
+        ESP_LOGW(TAG, "snap cause=BLE_DISC age=%lu last=%lu now=%lu", (unsigned long)pkt_age,
+                 (unsigned long)g_kk_tel.last_pkt_ms, (unsigned long)now_ms);
         ht_enter_failsafe(cfg, true);
         return;
     }
     if (g_kk_tel.last_pkt_ms > 0 && pkt_age >= KK_RX_FS_TEL_LOST_MS) {
+        ESP_LOGW(TAG, "snap cause=TEL_LOST age=%lu last=%lu now=%lu", (unsigned long)pkt_age,
+                 (unsigned long)g_kk_tel.last_pkt_ms, (unsigned long)now_ms);
         ht_enter_failsafe(cfg, true);
         return;
     }

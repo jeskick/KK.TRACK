@@ -1,6 +1,7 @@
 #include "tx_ota.h"
 
 #include "kk/link_config.h"
+#include "kk/ota_image.h"
 #include "kk/time.h"
 
 #include "esp_log.h"
@@ -45,7 +46,7 @@ static uint32_t s_finish_start_ms;
 static uint32_t s_stall_ms;
 static size_t s_stall_last;
 static uint8_t s_log_pct;
-static bool s_magic_checked;
+static kk_ota_img_check_t s_img;
 static bool s_boot_confirmed;
 static uint32_t s_boot_ms;
 static kk_tx_ota_signal_fn s_signal_fn;
@@ -69,22 +70,6 @@ static bool kk_tx_ota_rx_push_unsafe(const uint8_t *data, size_t len)
     }
     memcpy(s_rx_buf + s_rx_len, data, len);
     s_rx_len += len;
-    return true;
-}
-
-static bool kk_tx_ota_check_magic(const uint8_t *data, size_t len)
-{
-    if (s_magic_checked || s_written > 0 || s_rx_len > 0) {
-        return true;
-    }
-    if (!data || len == 0) {
-        return false;
-    }
-    if (data[0] != KK_OTA_IMAGE_MAGIC) {
-        ESP_LOGW(TAG, "OTA bad image magic 0x%02x", (unsigned)data[0]);
-        return false;
-    }
-    s_magic_checked = true;
     return true;
 }
 
@@ -116,6 +101,7 @@ static esp_err_t kk_tx_ota_drain_rx(bool flush_all)
         uint8_t tmp[512];
         size_t n;
 
+        /* 出队与缓冲压实须原子完成，否则并发的 kk_tx_ota_on_chunk 入队会撞坏缓冲 */
         portENTER_CRITICAL(&s_ota_mux);
         if (s_rx_len == 0) {
             portEXIT_CRITICAL(&s_ota_mux);
@@ -127,13 +113,14 @@ static esp_err_t kk_tx_ota_drain_rx(bool flush_all)
         }
         memcpy(tmp, s_rx_buf, n);
         s_rx_len -= n;
-        const size_t shift = s_rx_len;
-        portEXIT_CRITICAL(&s_ota_mux);
-        if (shift > 0) {
-            memmove(s_rx_buf, s_rx_buf + n, shift);
+        if (s_rx_len > 0) {
+            memmove(s_rx_buf, s_rx_buf + n, s_rx_len);
         }
+        portEXIT_CRITICAL(&s_ota_mux);
 
-        if (!kk_tx_ota_check_magic(tmp, n)) {
+        /* 首包校验：必须是合法 ESP app 镜像且工程名为 TX，杜绝刷错固件变砖 */
+        if (kk_ota_img_check_feed(&s_img, tmp, n, KK_OTA_PROJ_TX) == KK_OTA_IMG_REJECT) {
+            ESP_LOGW(TAG, "OTA reject image (magic/project mismatch)");
             return ESP_ERR_INVALID_CRC;
         }
         if (s_written + n > s_total) {
@@ -176,7 +163,7 @@ void kk_tx_ota_init(void)
     s_stall_ms = 0;
     s_stall_last = 0;
     s_log_pct = 0;
-    s_magic_checked = false;
+    kk_ota_img_check_reset(&s_img);
     s_boot_confirmed = false;
     s_boot_ms = kk_millis();
 }
@@ -293,7 +280,7 @@ esp_err_t kk_tx_ota_begin(size_t size)
     s_stall_ms = 0;
     s_stall_last = 0;
     s_log_pct = 0;
-    s_magic_checked = false;
+    kk_ota_img_check_reset(&s_img);
     s_stall_ms = kk_millis();
     s_stall_last = 0;
     ESP_LOGW(TAG, "OTA begin size=%u -> %s", (unsigned)size, s_part->label);
@@ -364,7 +351,7 @@ void kk_tx_ota_abort(void)
     s_written = 0;
     s_rx_len = 0;
     s_log_pct = 0;
-    s_magic_checked = false;
+    kk_ota_img_check_reset(&s_img);
     s_part = NULL;
     s_handle = 0;
     if (was_active && s_signal_fn) {

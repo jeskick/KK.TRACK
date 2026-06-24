@@ -82,7 +82,9 @@ void kk_tel_poll_rx_voltage(void)
 void kk_tel_poll_link(void)
 {
     const uint32_t now = kk_millis();
-    if (g_kk_tel.last_txv_ms > 0 && now - g_kk_tel.last_txv_ms > 8000) {
+    /* last_txv_ms 由 BLE 主机任务写入，可能偶尔领先本任务的 now；用有符号差判断，
+     * 避免 now-last 在 uint32 下溢成天文数字而误判 TX 电压超时失效。 */
+    if (g_kk_tel.last_txv_ms > 0 && (int32_t)(now - g_kk_tel.last_txv_ms) > 8000) {
         g_kk_tel.tx_v_valid = false;
     }
 }

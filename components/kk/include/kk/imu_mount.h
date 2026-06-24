@@ -53,6 +53,19 @@ void kk_imu_mount_apply_quat(const kk_quat_t *q_now, const kk_quat_t *q_zero,
                              const kk_imu_mount_t *mount, float *yaw_deg,
                              float *pitch_deg, float *roll_deg);
 
+/*
+ * 几何解耦：用头部前向轴(逻辑+Y)朝向向量直接求 yaw/pitch，roll 不参与，
+ * 天然无 roll 耦合、全姿态连续（无欧拉奇异跳变）。
+ *   yaw   = atan2(-fx, fy)     朝向在水平面(XY)的航向
+ *   pitch = asin(fz)           朝向的仰角
+ *   roll  = 绕 +Y 的扭转(twist) 几何精确，供遥测/手势
+ * yaw_hold：调用方持有的上一帧 yaw（指向近乎垂直、航向退化时保持，避免抖动），
+ * 在归零时应清零。任一输出指针可为 NULL。
+ */
+void kk_imu_mount_apply_geo(const kk_quat_t *q_now, const kk_quat_t *q_zero,
+                            const kk_imu_mount_t *mount, float *yaw_hold,
+                            float *yaw_deg, float *pitch_deg, float *roll_deg);
+
 /** 从相对四元数提取传感器欧拉（调试用，与驱动公式一致） */
 void kk_imu_quat_to_sensor_rel(const kk_quat_t *q_rel, float sensor_rel[3]);
 

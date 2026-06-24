@@ -4,6 +4,9 @@
 
 #include <math.h>
 
+/* 释放保持窗换算为样本数（apply 每个 quat 上报调用一次，节拍 = KK_TX_IMU_REPORT_US） */
+#define KK_XDEC_REL_HOLD_N ((uint16_t)(KK_XDEC_REL_HOLD_MS * 1000UL / KK_TX_IMU_REPORT_US))
+
 /*
  * L2 TX 轴解耦 — 主导轴全速；干扰轴按 UI strength 抑制。
  *
@@ -94,6 +97,114 @@ static float kk_dec_axis_gain(float sup_f, float strength, float min_gain)
         g = 1.0f;
     }
     return g;
+}
+
+static void kk_xdec_seed(kk_imu_xdec_t *st, float yaw_geo, float pitch_geo)
+{
+    st->out_yaw = yaw_geo;
+    st->out_pitch = pitch_geo;
+    st->ref_yaw = yaw_geo;
+    st->ref_pitch = pitch_geo;
+    st->sup_yaw = 0.0f;
+    st->sup_pitch = 0.0f;
+    st->rel_hold = 0;
+    st->seeded = true;
+}
+
+void kk_imu_xdec_reset(kk_imu_xdec_t *st)
+{
+    if (!st) {
+        return;
+    }
+    st->seeded = false;
+    st->out_yaw = 0.0f;
+    st->out_pitch = 0.0f;
+    st->ref_yaw = 0.0f;
+    st->ref_pitch = 0.0f;
+    st->sup_yaw = 0.0f;
+    st->sup_pitch = 0.0f;
+    st->rel_hold = 0;
+}
+
+/*
+ * 绝对保持 + 平滑释放（与 IMU 上报率无关）：
+ *   out = geo + eff*(ref - geo)，eff = strength*sup（0..1）。
+ *   sup=0 → out=geo（全跟手）；sup=1 → out=ref（真冻结，无论调用多少次都不动）。
+ * ref 在该轴“自由”(sup<REF_FREE)时持续锁存几何真值；对侧主导使 sup 升高时 ref 冻结于
+ * 动作开始前角度，从而把整段持续耦合挡在外面；动作结束 sup 缓释，out 由 ref 平滑滑回真值。
+ */
+void kk_imu_xdec_apply(kk_imu_xdec_t *st, float yaw_geo, float pitch_geo, float gyro_yaw_dps,
+                       float gyro_pitch_dps, const kk_tx_track_cfg_t *cfg, float *yaw_out,
+                       float *pitch_out)
+{
+    if (!st || !yaw_out || !pitch_out) {
+        return;
+    }
+
+    /* 关闭或未播种：直通几何角并(重新)播种，便于重开时平滑接续 */
+    if (!cfg || !cfg->decouple_en || !st->seeded) {
+        kk_xdec_seed(st, yaw_geo, pitch_geo);
+        *yaw_out = yaw_geo;
+        *pitch_out = pitch_geo;
+        return;
+    }
+
+    float strength = (float)cfg->decouple_str_x100 / 100.0f;
+    if (strength > 1.0f) {
+        strength = 1.0f;
+    }
+    const float dom_start = (float)cfg->decouple_dom_x10 / 100.0f;
+    float dom_full = dom_start + KK_XDEC_DOM_SPAN;
+    if (dom_full > 0.95f) {
+        dom_full = 0.95f;
+    }
+
+    const float gy = fabsf(gyro_yaw_dps);
+    const float gp = fabsf(gyro_pitch_dps);
+    const float total = gy + gp;
+
+    float sup_yaw_tgt = 0.0f;
+    float sup_pitch_tgt = 0.0f;
+    if (total >= KK_XDEC_ACT_MIN_DPS) {
+        const float share_yaw = gy / total;
+        const float share_pitch = gp / total;
+        /* yaw 主导 -> 抑制 pitch；pitch 主导 -> 抑制 yaw */
+        sup_pitch_tgt = kk_dec_smooth01(share_yaw, dom_start, dom_full);
+        sup_yaw_tgt = kk_dec_smooth01(share_pitch, dom_start, dom_full);
+        st->rel_hold = KK_XDEC_REL_HOLD_N; /* 有效活动：刷满释放保持窗 */
+    } else if (st->rel_hold > 0) {
+        /* 换向瞬间两轴速度同时过零，total 短暂跌破 ACT_MIN：维持上一拍抑制目标，
+         * sup/ref 都不动，桥过速度凹陷，杜绝被冻结轴朝耦合值弹跳的换向毛刺 */
+        st->rel_hold--;
+        sup_yaw_tgt = st->sup_yaw;
+        sup_pitch_tgt = st->sup_pitch;
+    }
+    /* else：保持窗耗尽(真正持续静止) -> 目标归零，下方 EMA 平滑释放、ref 重锁、收敛真值 */
+
+    st->sup_yaw =
+        kk_dec_ema_asym(st->sup_yaw, sup_yaw_tgt, KK_XDEC_SUP_ATTACK, KK_XDEC_SUP_RELEASE);
+    st->sup_pitch =
+        kk_dec_ema_asym(st->sup_pitch, sup_pitch_tgt, KK_XDEC_SUP_ATTACK, KK_XDEC_SUP_RELEASE);
+
+    /* 自由时持续锁存几何真值；被抑制(sup≥REF_FREE)时 ref 冻结，保持动作前绝对角 */
+    if (st->sup_yaw < KK_XDEC_REF_FREE) {
+        st->ref_yaw = yaw_geo;
+    }
+    if (st->sup_pitch < KK_XDEC_REF_FREE) {
+        st->ref_pitch = pitch_geo;
+    }
+
+    const float eff_yaw = strength * st->sup_yaw;
+    const float eff_pitch = strength * st->sup_pitch;
+
+    /* out = geo + eff*(ref - geo)，含角度环绕；规范到 [-180,180] */
+    const float d_yaw = kk_dec_wrap_delta(yaw_geo, st->ref_yaw);
+    const float d_pitch = kk_dec_wrap_delta(pitch_geo, st->ref_pitch);
+    st->out_yaw = kk_dec_wrap_delta(0.0f, yaw_geo + eff_yaw * d_yaw);
+    st->out_pitch = kk_dec_wrap_delta(0.0f, pitch_geo + eff_pitch * d_pitch);
+
+    *yaw_out = st->out_yaw;
+    *pitch_out = st->out_pitch;
 }
 
 void kk_imu_decouple_reset(kk_imu_decouple_t *st, float yaw_deg, float pitch_deg)

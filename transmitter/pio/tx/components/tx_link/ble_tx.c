@@ -509,6 +509,28 @@ bool kk_ble_tx_host_ready(void)
     return s_host_ready && ble_hs_synced();
 }
 
+static void kk_ble_tx_tune_conn(void)
+{
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+        return;
+    }
+    /* 收紧连接间隔到 ~15–22.5ms，匹配 50Hz 遥测写入节奏：让 ACL/mbuf 缓冲及时排空，
+     * 杜绝高负载下控制器/host 缓冲堆积导致的 os_memblock 耗尽掉线；同时降低跟随延迟。
+     * 间隔区间留有上沿(22.5ms)便于与 RX 端 WiFi SoftAP 共存自适应。 */
+    struct ble_gap_upd_params p = {
+        .itvl_min = 12, /* 12 * 1.25ms = 15ms */
+        .itvl_max = 18, /* 18 * 1.25ms = 22.5ms */
+        .latency = 0,
+        .supervision_timeout = 400, /* 400 * 10ms = 4s */
+        .min_ce_len = 0,
+        .max_ce_len = 0,
+    };
+    int rc = ble_gap_update_params(s_conn_handle, &p);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "conn param update rc=%d", rc);
+    }
+}
+
 static bool kk_ble_tx_finish_pair(bool save_mac)
 {
     if (!kk_ble_tx_wait_gatt_ready(5000)) {
@@ -517,6 +539,7 @@ static bool kk_ble_tx_finish_pair(bool save_mac)
     }
     ble_gattc_exchange_mtu(s_conn_handle, NULL, NULL);
     kk_delay_ms(150);
+    kk_ble_tx_tune_conn();
     if (s_link_val_handle != 0) {
         char ver[40];
         snprintf(ver, sizeof(ver), "VER,%s", kk_fw_local_version());

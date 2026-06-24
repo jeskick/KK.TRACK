@@ -4,6 +4,7 @@
 #include "kk/imu_mount.h"
 #include "kk/gesture_cfg.h"
 #include "kk/rx_profile.h"
+#include "kk/rc_out.h"
 #include "kk/rx_ota.h"
 #include "kk/tx_track_cfg.h"
 #include "kk/telemetry.h"
@@ -50,13 +51,13 @@ static void kk_rx_web_json_config(char *buf, size_t cap)
         return;
     }
     snprintf(buf, cap,
-             "{\"ch_lr\":%u,\"ch_ud\":%u,\"offset_lr\":%d,\"offset_ud\":%d,"
+             "{\"rc_proto\":%u,\"ch_lr\":%u,\"ch_ud\":%u,\"offset_lr\":%d,\"offset_ud\":%d,"
              "\"scale_lr\":%u,\"scale_ud\":%u,\"yaw_servo_deg\":%u,\"rev_lr\":%u,\"rev_ud\":%u,"
              "\"mount_horiz\":%u,\"mount_lr\":%u,\"mount_fb\":%u,"
              "\"gest_roll_deg\":%u,\"gest_swing_ms\":%u,"
              "\"track_decouple_en\":%u,\"track_motion_en\":%u,"
              "\"track_decouple_str_x100\":%u,\"track_decouple_dom_x10\":%u}",
-             s_profile->ch_lr, s_profile->ch_ud, s_profile->offset_lr, s_profile->offset_ud,
+             s_profile->rc_proto, s_profile->ch_lr, s_profile->ch_ud, s_profile->offset_lr, s_profile->offset_ud,
              s_profile->scale_lr, s_profile->scale_ud, s_profile->yaw_servo_deg,
              s_profile->rev_lr ? 1U : 0U, s_profile->rev_ud ? 1U : 0U,
              kk_imu_mount_steps_to_deg(s_profile->mount_horiz),
@@ -97,9 +98,10 @@ static esp_err_t status_get(httpd_req_t *req)
              "{\"ppm_lr\":%u,\"ppm_ud\":%u,\"ch_lr\":%u,\"ch_ud\":%u,\"yaw\":%.2f,\"pitch\":%.2f,"
              "\"track_decouple_en\":%u,\"track_motion_en\":%u,"
              "\"track_decouple_str_x100\":%u,\"track_decouple_dom_x10\":%u,"
-             "\"rx_ver\":\"%s\",\"tx_ver\":\"%s\",\"ota_max\":%u,\"ota_ready\":%u}",
+             "\"rx_ver\":\"%s\",\"tx_ver\":\"%s\",\"rc_proto\":%u,\"ota_max\":%u,\"ota_ready\":%u}",
              g_kk_ht.ppm_lr, g_kk_ht.ppm_ud, clr, cud, g_kk_ht.yaw_f, g_kk_ht.pitch_f, trk_dec,
              trk_mob, trk_str, trk_dom, kk_fw_local_version(), kk_fw_tx_version(),
+             s_profile ? s_profile->rc_proto : 0U,
              (unsigned)kk_rx_ota_max_image_bytes(),
              kk_rx_ota_max_image_bytes() > 0U ? 1U : 0U);
     httpd_resp_set_type(req, "application/json");
@@ -197,6 +199,11 @@ static esp_err_t ota_stream_run(httpd_req_t *req, bool target_tx, char *out, siz
 
     err = target_tx ? kk_rx_ota_tx_finish() : kk_rx_ota_local_finish();
     if (err != ESP_OK) {
+        /* finish 失败（如等 TX OTA,DONE 超时）须显式中止 TX 会话，
+         * 否则 TX 侧会一直挂到自身 stall 超时（~90s） */
+        if (target_tx) {
+            kk_rx_ota_tx_abort();
+        }
         snprintf(out, out_cap, "{\"ok\":false,\"err\":\"finish\",\"code\":%d}", (int)err);
         return ESP_OK;
     }
@@ -330,6 +337,9 @@ static esp_err_t save_post(httpd_req_t *req)
     }
 
     kk_rx_profile_t p = *s_profile;
+    const uint8_t old_proto = p.rc_proto;
+    p.rc_proto = (uint8_t)kk_rc_out_sanitize_proto(
+        (uint8_t)kk_web_arg_int(body, "rc_proto", (int)p.rc_proto));
     p.ch_lr = (uint8_t)kk_web_arg_int(body, "ch_lr", p.ch_lr);
     p.ch_ud = (uint8_t)kk_web_arg_int(body, "ch_ud", p.ch_ud);
     p.offset_lr = (int16_t)kk_web_arg_int(body, "offset_lr", p.offset_lr);
@@ -355,6 +365,9 @@ static esp_err_t save_post(httpd_req_t *req)
     kk_rx_profile_sanitize(&p);
     *s_profile = p;
     kk_rx_profile_save(s_profile);
+    if (kk_rc_out_is_running() && p.rc_proto != old_proto) {
+        kk_rc_out_begin((kk_rc_proto_t)p.rc_proto);
+    }
     kk_head_track_snap_telemetry();
     kk_head_track_apply(s_profile);
     if (s_mount_sync) {
@@ -376,8 +389,8 @@ static esp_err_t save_post(httpd_req_t *req)
         s_on_saved();
     }
 
-    ESP_LOGW(TAG, "[WEB] save ch_lr=%u ch_ud=%u yaw_srv=%u off_lr=%d off_ud=%d scale=%u/%u rev=%u/%u gest=%u/%u trk=%u/%u str=%u dom=%u",
-             p.ch_lr, p.ch_ud, p.yaw_servo_deg, (int)p.offset_lr, (int)p.offset_ud,
+    ESP_LOGW(TAG, "[WEB] save proto=%u ch_lr=%u ch_ud=%u yaw_srv=%u off_lr=%d off_ud=%d scale=%u/%u rev=%u/%u gest=%u/%u trk=%u/%u str=%u dom=%u",
+             p.rc_proto, p.ch_lr, p.ch_ud, p.yaw_servo_deg, (int)p.offset_lr, (int)p.offset_ud,
              p.scale_lr, p.scale_ud, p.rev_lr ? 1U : 0U, p.rev_ud ? 1U : 0U,
              p.gest_roll_deg, p.gest_swing_ms,
              p.track_decouple_en ? 1U : 0U, p.track_motion_en ? 1U : 0U,
@@ -401,6 +414,9 @@ static esp_err_t reset_post(httpd_req_t *req)
         return httpd_resp_send(req, "{\"ok\":false}", HTTPD_RESP_USE_STRLEN);
     }
     kk_rx_profile_reset(s_profile);
+    if (kk_rc_out_is_running()) {
+        kk_rc_out_begin((kk_rc_proto_t)s_profile->rc_proto);
+    }
     kk_head_track_snap_telemetry();
     kk_head_track_apply(s_profile);
     if (s_mount_sync) {

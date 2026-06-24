@@ -22,12 +22,17 @@ static bool s_inited;
 static bool s_has_pose;
 static bool s_stability_on;
 static bool s_lin_accel_on;
+static bool s_gravity_on;
 static float s_sensor_rel[3];
 static float s_yaw_deg;
 static float s_pitch_deg;
 static float s_roll_deg;
 static float s_yaw_raw;
 static float s_pitch_raw;
+#if KK_IMU_DECOUPLE_GEOMETRIC
+static float s_geo_yaw_hold; /* 几何法航向退化时保持的上一帧 yaw */
+static kk_imu_xdec_t s_xdec; /* 几何法之上的跨轴干扰过滤器状态 */
+#endif
 static kk_quat_t s_zero_quat;
 static kk_quat_t s_last_quat;
 static bool s_zero_set;
@@ -35,8 +40,10 @@ static kk_imu_decouple_t s_decouple;
 static uint32_t s_gyro_count;
 static uint32_t s_stab_count;
 static uint32_t s_lin_count;
+static uint32_t s_grav_count;
 static int8_t s_stability;
 static float s_lin_accel_mps2;
+static float s_grav_logic[3];
 static float s_gyro_pitch_dps;
 static float s_gyro_yaw_dps;
 static float s_gyro_roll_dps;
@@ -48,6 +55,7 @@ static uint32_t s_last_motion_ms;
 static uint32_t s_quat_count;
 static uint8_t s_stall_streak;
 static uint32_t s_next_recover_ms;
+static kk_imu_tx_dbg_t s_dbg;
 
 #ifndef KK_RAD2DEG_F
 #define KK_RAD2DEG_F 57.295779513082320876798154814105f
@@ -65,6 +73,10 @@ static void kk_imu_tx_on_motion_rezero(void)
     }
     s_zero_set = false;
     kk_imu_decouple_reset(&s_decouple, 0.0f, 0.0f);
+#if KK_IMU_DECOUPLE_GEOMETRIC
+    s_geo_yaw_hold = 0.0f;
+    kk_imu_xdec_reset(&s_xdec);
+#endif
     s_yaw_deg = 0.0f;
     s_pitch_deg = 0.0f;
     s_pose_yaw = 0.0f;
@@ -105,6 +117,10 @@ static bool kk_imu_tx_try_recover(void)
     s_last_motion_ms = 0;
     s_stall_streak = 0;
     kk_imu_decouple_reset(&s_decouple, 0.0f, 0.0f);
+#if KK_IMU_DECOUPLE_GEOMETRIC
+    s_geo_yaw_hold = 0.0f;
+    kk_imu_xdec_reset(&s_xdec);
+#endif
     kk_motion_detect_reset();
     ESP_LOGW(TAG, "recover: OK mob=%u", mob ? 1U : 0U);
     return true;
@@ -165,6 +181,32 @@ static void kk_imu_tx_refresh_lin_accel(void)
     s_lin_accel_mps2 = sqrtf(ax * ax + ay * ay + az * az);
 }
 
+static void kk_imu_tx_refresh_gravity(void)
+{
+    if (!s_gravity_on) {
+        s_grav_logic[0] = 0.0f;
+        s_grav_logic[1] = 0.0f;
+        s_grav_logic[2] = -1.0f;
+        return;
+    }
+    const uint32_t n = BNO08x_get_gravity_update_count(&s_imu);
+    if (n == s_grav_count) {
+        return;
+    }
+    s_grav_count = n;
+
+    float gx = 0.0f;
+    float gy = 0.0f;
+    float gz = 0.0f;
+    uint8_t acc = 0;
+    BNO08x_get_gravity(&s_imu, &gx, &gy, &gz, &acc);
+    (void)acc;
+    const kk_imu_mount_t *mount = kk_tx_mount_get();
+    /* 与陀螺相同 mount 旋转；grav_logic = [pitch, roll, yaw] 逻辑轴分量 */
+    kk_imu_mount_gyro_to_logic(mount, gx, gy, gz, &s_grav_logic[0], &s_grav_logic[2],
+                               &s_grav_logic[1]);
+}
+
 static void kk_imu_tx_motion_step(uint32_t elapsed_ms)
 {
     if (kk_gesture_center_is_active()) {
@@ -174,8 +216,8 @@ static void kk_imu_tx_motion_step(uint32_t elapsed_ms)
         return;
     }
     kk_motion_detect_apply(s_pose_yaw, s_pose_pitch, s_gyro_pitch_dps, s_gyro_yaw_dps,
-                           s_gyro_roll_dps, s_stability, s_lin_accel_mps2, elapsed_ms,
-                           &s_yaw_deg, &s_pitch_deg);
+                           s_gyro_roll_dps, s_stability, s_lin_accel_mps2, s_grav_logic,
+                           elapsed_ms, &s_yaw_deg, &s_pitch_deg);
 }
 
 static void kk_imu_tx_update_mapped(const kk_quat_t *q_now)
@@ -187,10 +229,47 @@ static void kk_imu_tx_update_mapped(const kk_quat_t *q_now)
 
     float pose_yaw = s_yaw_raw;
     float pose_pitch = s_pitch_raw;
+    float geo_yaw = s_yaw_raw;
+    float geo_pitch = s_pitch_raw;
+#if KK_IMU_DECOUPLE_GEOMETRIC
+    if (track && track->decouple_en) {
+        /* 几何解耦：由头部前向向量直接得 yaw/pitch，roll 不耦合、无奇异跳变 */
+        kk_imu_mount_apply_geo(q_now, &s_zero_quat, mount, &s_geo_yaw_hold, &pose_yaw,
+                               &pose_pitch, NULL);
+        geo_yaw = pose_yaw;
+        geo_pitch = pose_pitch;
+        /* 跨轴干扰过滤：主观轴全跟手，对侧陀螺主导时压低本轴，滤掉转头带俯仰/点头带偏航 */
+        kk_imu_xdec_apply(&s_xdec, pose_yaw, pose_pitch, s_gyro_yaw_dps, s_gyro_pitch_dps, track,
+                          &pose_yaw, &pose_pitch);
+    } else {
+        /* decouple_en 关闭时保持原始欧拉角（耦合，便于网页对比）；过滤器置位，重开时平滑接续 */
+        kk_imu_xdec_reset(&s_xdec);
+    }
+#else
     kk_imu_decouple_apply(&s_decouple, s_yaw_raw, s_pitch_raw, s_roll_deg, s_gyro_pitch_dps,
                           s_gyro_yaw_dps, s_gyro_roll_dps, track, &pose_yaw, &pose_pitch);
+    geo_yaw = pose_yaw;
+    geo_pitch = pose_pitch;
+#endif
     s_pose_yaw = pose_yaw;
     s_pose_pitch = pose_pitch;
+
+    /* 解耦链路调试快照（供 KK_DBG_DECOUPLE 实时流分析；热路径仅几次赋值，开销可忽略） */
+    s_dbg.raw_yaw = s_yaw_raw;
+    s_dbg.raw_pitch = s_pitch_raw;
+    s_dbg.geo_yaw = geo_yaw;
+    s_dbg.geo_pitch = geo_pitch;
+    s_dbg.out_yaw = pose_yaw;
+    s_dbg.out_pitch = pose_pitch;
+    s_dbg.gyro_yaw = s_gyro_yaw_dps;
+    s_dbg.gyro_pitch = s_gyro_pitch_dps;
+#if KK_IMU_DECOUPLE_GEOMETRIC
+    s_dbg.sup_yaw = s_xdec.sup_yaw;
+    s_dbg.sup_pitch = s_xdec.sup_pitch;
+#else
+    s_dbg.sup_yaw = s_decouple.sup_yaw_f;
+    s_dbg.sup_pitch = s_decouple.sup_pitch_f;
+#endif
 
     uint32_t elapsed_ms = KK_TX_POSE_DT_MS;
     const uint32_t now = kk_millis();
@@ -263,6 +342,7 @@ void kk_imu_tx_motion_sensors(bool enable)
     if (!s_inited) {
         s_stability_on = enable;
         s_lin_accel_on = enable;
+        s_gravity_on = enable;
         s_mob_lin_pending = false;
         return;
     }
@@ -276,9 +356,11 @@ void kk_imu_tx_motion_sensors(bool enable)
         }
         if (s_mob_lin_pending && !s_lin_accel_on) {
             s_lin_accel_on = true;
+            s_gravity_on = true;
             s_mob_lin_pending = false;
             BNO08x_enable_linear_accelerometer(&s_imu, KK_MOB_LIN_ACCEL_REPORT_US);
-            ESP_LOGW(TAG, "linear accel on");
+            BNO08x_enable_gravity(&s_imu, KK_MOB_LIN_ACCEL_REPORT_US);
+            ESP_LOGW(TAG, "linear accel + gravity on");
         }
         return;
     }
@@ -289,6 +371,15 @@ void kk_imu_tx_motion_sensors(bool enable)
         s_stability = 0;
         s_stab_count = 0;
         ESP_LOGW(TAG, "stability classifier off");
+    }
+    if (s_gravity_on) {
+        s_gravity_on = false;
+        BNO08x_disable_gravity(&s_imu);
+        s_grav_count = 0;
+        s_grav_logic[0] = 0.0f;
+        s_grav_logic[1] = 0.0f;
+        s_grav_logic[2] = -1.0f;
+        ESP_LOGW(TAG, "gravity off");
     }
     if (s_lin_accel_on) {
         s_lin_accel_on = false;
@@ -344,6 +435,7 @@ bool kk_imu_tx_poll(void)
     kk_imu_tx_refresh_gyro();
     kk_imu_tx_refresh_stability();
     kk_imu_tx_refresh_lin_accel();
+    kk_imu_tx_refresh_gravity();
 
     const bool sensors_new =
         s_gyro_count != gyro_before || s_stab_count != stab_before || s_lin_count != lin_before;
@@ -371,6 +463,10 @@ bool kk_imu_tx_poll(void)
             s_zero_quat = s_last_quat;
             s_zero_set = true;
             kk_imu_decouple_reset(&s_decouple, 0.0f, 0.0f);
+#if KK_IMU_DECOUPLE_GEOMETRIC
+            s_geo_yaw_hold = 0.0f;
+            kk_imu_xdec_reset(&s_xdec);
+#endif
             kk_motion_detect_reset();
             ESP_LOGW(TAG, "zero quat w=%.3f x=%.3f y=%.3f z=%.3f", s_zero_quat.w, s_zero_quat.x,
                      s_zero_quat.y, s_zero_quat.z);
@@ -437,6 +533,13 @@ float kk_imu_tx_gyro_yaw_dps(void)
     return s_gyro_yaw_dps;
 }
 
+void kk_imu_tx_get_dbg(kk_imu_tx_dbg_t *out)
+{
+    if (out) {
+        *out = s_dbg;
+    }
+}
+
 float kk_imu_tx_sensor_deg(uint8_t axis)
 {
     if (axis > 2) {
@@ -449,6 +552,10 @@ void kk_imu_tx_rezero(void)
 {
     s_zero_set = false;
     kk_imu_decouple_reset(&s_decouple, 0.0f, 0.0f);
+#if KK_IMU_DECOUPLE_GEOMETRIC
+    s_geo_yaw_hold = 0.0f;
+    kk_imu_xdec_reset(&s_xdec);
+#endif
     kk_motion_detect_reset();
 }
 
@@ -467,6 +574,9 @@ void kk_imu_tx_set_mount(const kk_imu_mount_t *mount)
         kk_imu_mount_apply_quat(&s_last_quat, &s_zero_quat, kk_tx_mount_get(), &s_yaw_raw,
                                 &s_pitch_raw, &s_roll_deg);
         kk_imu_decouple_reset(&s_decouple, s_yaw_raw, s_pitch_raw);
+#if KK_IMU_DECOUPLE_GEOMETRIC
+        kk_imu_xdec_reset(&s_xdec);
+#endif
         kk_imu_tx_update_mapped(&s_last_quat);
     }
 }
