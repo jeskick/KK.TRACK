@@ -200,7 +200,8 @@ static void tel_poll_imu(void)
     char payload[48];
     const float yaw = kk_imu_tx_yaw_deg();
     const float pitch = kk_imu_tx_pitch_deg();
-    if (kk_tel_format_pose(payload, sizeof(payload), yaw, pitch)) {
+    if (kk_tel_format_pose(payload, sizeof(payload), yaw, pitch,
+                           kk_imu_tx_is_motion_paused())) {
         if (!kk_ble_tx_send_telemetry(payload)) {
             /* 写入失败多为链路拥塞/mbuf 暂不足：退避一拍给协议栈排空，
              * 避免以 20ms 节奏持续重试把缓冲彻底打爆（os_memblock 耗尽掉线）。 */

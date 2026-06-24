@@ -173,10 +173,7 @@ static esp_err_t kk_rc_serial_begin(kk_rc_proto_t proto)
 
 uint8_t kk_rc_out_sanitize_proto(uint8_t v)
 {
-    if (v > KK_RC_PROTO_CRSF) {
-        return KK_RC_PROTO_PPM;
-    }
-    return v;
+    return kk_rc_proto_sanitize(v);
 }
 
 kk_rc_proto_t kk_rc_out_get_proto(void)

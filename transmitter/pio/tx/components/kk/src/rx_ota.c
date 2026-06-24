@@ -348,6 +348,11 @@ esp_err_t kk_rx_ota_tx_begin(size_t size)
     kk_ota_set(KK_OTA_TX_RELAY, 0, 0, "tx begin");
     s_tx_log_pct = 0;
     esp_err_t err = s_tx_ops.begin(size);
+    if (err == ESP_ERR_NOT_FINISHED) {
+        kk_ota_set(KK_OTA_TX_RELAY, 0, 0, "tx relay");
+        ESP_LOGW(TAG, "TX OTA relay start size=%u (async begin)", (unsigned)size);
+        return ESP_ERR_NOT_FINISHED;
+    }
     if (err != ESP_OK) {
         s_open = false;
         s_total = 0;
@@ -357,6 +362,26 @@ esp_err_t kk_rx_ota_tx_begin(size_t size)
     kk_ota_set(KK_OTA_TX_RELAY, 0, 0, "tx relay");
     ESP_LOGW(TAG, "TX OTA relay start size=%u", (unsigned)size);
     return ESP_OK;
+}
+
+esp_err_t kk_rx_ota_tx_begin_poll(void)
+{
+    if (!s_tx_ops.begin_poll) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_st.phase != KK_OTA_TX_RELAY || !s_open) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    const esp_err_t err = s_tx_ops.begin_poll();
+    if (err == ESP_ERR_NOT_FINISHED) {
+        return ESP_ERR_NOT_FINISHED;
+    }
+    if (err != ESP_OK) {
+        s_open = false;
+        s_total = 0;
+        kk_ota_set(KK_OTA_ERR, 0, (int)err, "tx begin");
+    }
+    return err;
 }
 
 esp_err_t kk_rx_ota_tx_write(const uint8_t *data, size_t len)

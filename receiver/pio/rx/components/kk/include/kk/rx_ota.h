@@ -39,6 +39,7 @@ esp_err_t kk_rx_ota_local_finish(void);
 void kk_rx_ota_local_abort(void);
 
 typedef esp_err_t (*kk_rx_ota_tx_begin_fn)(size_t size);
+typedef esp_err_t (*kk_rx_ota_tx_begin_poll_fn)(void);
 typedef esp_err_t (*kk_rx_ota_tx_write_fn)(const uint8_t *data, size_t len);
 typedef esp_err_t (*kk_rx_ota_tx_finish_fn)(void);
 typedef void (*kk_rx_ota_tx_abort_fn)(void);
@@ -47,6 +48,7 @@ typedef bool (*kk_rx_ota_tx_ready_fn)(void);
 typedef struct {
     kk_rx_ota_tx_ready_fn ready;
     kk_rx_ota_tx_begin_fn begin;
+    kk_rx_ota_tx_begin_poll_fn begin_poll;
     kk_rx_ota_tx_write_fn write;
     kk_rx_ota_tx_finish_fn finish;
     kk_rx_ota_tx_abort_fn abort;
@@ -55,6 +57,7 @@ typedef struct {
 void kk_rx_ota_set_tx_ops(const kk_rx_ota_tx_ops_t *ops);
 
 esp_err_t kk_rx_ota_tx_begin(size_t size);
+esp_err_t kk_rx_ota_tx_begin_poll(void);
 esp_err_t kk_rx_ota_tx_write(const uint8_t *data, size_t len);
 esp_err_t kk_rx_ota_tx_finish(void);
 void kk_rx_ota_tx_abort(void);

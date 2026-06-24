@@ -17,6 +17,7 @@ void kk_ble_rx_send_gesture(const kk_gesture_cfg_t *cfg);
 void kk_ble_rx_send_track(const kk_tx_track_cfg_t *cfg);
 bool kk_ble_rx_ota_tx_ready(void);
 esp_err_t kk_ble_rx_ota_tx_begin(size_t size);
+esp_err_t kk_ble_rx_ota_tx_begin_poll(void);
 esp_err_t kk_ble_rx_ota_tx_send(const uint8_t *data, size_t len);
 esp_err_t kk_ble_rx_ota_tx_finish(void);
 void kk_ble_rx_ota_tx_abort(void);

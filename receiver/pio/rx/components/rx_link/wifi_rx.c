@@ -27,6 +27,7 @@ static bool s_udp_on;
 static int s_udp_sock = -1;
 static uint32_t s_boot_until;
 static uint32_t s_sta_join_ms;
+static uint32_t s_sta_left_ms;
 static bool s_had_sta;
 
 static void kk_wifi_rx_sta_check(void)
@@ -130,6 +131,7 @@ void kk_wifi_rx_ap_stop(void)
     }
     s_had_sta = false;
     s_sta_join_ms = 0;
+    s_sta_left_ms = 0;
     s_boot_until = 0;
 }
 
@@ -159,6 +161,7 @@ void kk_wifi_rx_ap_start(void)
     s_boot_until = kk_millis() + KK_WIFI_BOOT_WAIT_MS;
     s_had_sta = false;
     s_sta_join_ms = 0;
+    s_sta_left_ms = 0;
     ESP_LOGW(TAG, "AP starting ssid=%s ch=%d tx=%.1fdBm boot=%lus http_idle=%lus",
              KK_WIFI_SSID, KK_WIFI_CHANNEL,
              KK_WIFI_TX_POWER_QDBM * 0.25f,
@@ -216,6 +219,7 @@ void kk_wifi_rx_idle_poll(void)
 
     if (have_sta) {
         s_had_sta = true;
+        s_sta_left_ms = 0;
     }
 
     if (!s_had_sta) {
@@ -228,7 +232,16 @@ void kk_wifi_rx_idle_poll(void)
     }
 
     if (!have_sta) {
-        ESP_LOGW(TAG, "STA left -> AP off");
+        if (s_sta_left_ms == 0) {
+            s_sta_left_ms = now;
+            ESP_LOGW(TAG, "STA left, grace %lus before AP off",
+                     (unsigned long)(KK_WIFI_STA_GRACE_MS / 1000UL));
+            return;
+        }
+        if (now - s_sta_left_ms < KK_WIFI_STA_GRACE_MS) {
+            return;
+        }
+        ESP_LOGW(TAG, "STA grace expired -> AP off");
         kk_wifi_rx_ap_stop();
         return;
     }

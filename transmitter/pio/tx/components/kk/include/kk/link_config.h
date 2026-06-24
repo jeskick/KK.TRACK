@@ -10,6 +10,7 @@
 #define KK_WIFI_BOOT_WAIT_MS     (60UL * 1000UL)  /* no STA join -> AP off */
 #define KK_WIFI_STABLE_DELAY_MS  3000             /* after PPM on, before AP */
 #define KK_WIFI_IDLE_MS          (30UL * 1000UL)  /* no HTTP traffic -> AP off */
+#define KK_WIFI_STA_GRACE_MS     (8UL * 1000UL)   /* STA 断开后宽限再关 AP */
 #define KK_WIFI_TX_POWER_QDBM    24               /* 6 dBm ~= 30% of 20 dBm max */
 
 #define KK_BLE_SVC_UUID16        0xFFF0

@@ -12,10 +12,8 @@ sdkconfig.*
 build/
 
 # Fetch cache
-transmitter/pio/imu_test/_vendor/
 
 # Python
-tools/imu_viewer/.venv/
 tools/decouple_scope/.venv/
 __pycache__/
 *.pyc

@@ -1,0 +1,1 @@
+TX/RX 共用 C 组件。RX 工程根目录有 **`.kk_rx_project`** 标记时编 RX 专用源码并链接 wifi/http/ota。

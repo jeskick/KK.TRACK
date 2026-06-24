@@ -1,16 +1,12 @@
 #pragma once
 
+#include "kk/rc_proto.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 
 #define KK_RC_CH_COUNT 8
 #define KK_CRSF_ADDR_FC 0xC8 /* Betaflight/ELRS 飞控 CRSF 目的地址 */
-
-typedef enum {
-    KK_RC_PROTO_PPM = 0,
-    KK_RC_PROTO_SBUS = 1,
-    KK_RC_PROTO_CRSF = 2, /* 单向 TX：RC 通道帧，不解析飞控回传 */
-} kk_rc_proto_t;
 
 void kk_rc_out_begin(kk_rc_proto_t proto);
 void kk_rc_out_stop(void);

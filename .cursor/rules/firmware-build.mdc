@@ -17,11 +17,16 @@ alwaysApply: false
 
 - RX 版本：`receiver/pio/rx/CMakeLists.txt`
 - TX 版本：`transmitter/pio/tx/CMakeLists.txt`
-- OTA 包命名：**`RX.1.0.9.bin`** / **`TX.1.0.8.bin`**（版本号与 CMakeLists 一致）
-- 网页 OTA 上传同名文件（也兼容旧名 `RX.bin` / `TX.bin`）
-- USB 全片烧录脚本 `flash_rx.ps1` / `flash_tx.ps1` 内部也会 `pio run`，同样会 bump 并写入 `ota/`
+- OTA 包命名：**`RX.1.0.9.bin`** / **`TX.1.0.8.bin`**
+- 网页 OTA：先 RX 后 TX；TX 中继需 BLE 已连
+- USB 全片烧录：`flash_rx.ps1` / `flash_tx.ps1`
+
+## 构建变体
+
+- `pio run` → 调试版（WARN 日志）
+- `pio run -e esp32-c3-release` → 正式版（无日志）
 
 ## 代理须知
 
-- 改完固件后帮用户编译时，**不要手改版本号**（pre 脚本会 bump）；若需指定版本，改 CMakeLists 后再编译一次即可。
-- OTA 顺序：**先 RX，再 TX**；TX OTA 需 RX↔TX 已配对连接。
+- 改完固件后帮用户编译时，**不要手改版本号**（pre 脚本会 bump）
+- 详细烧录说明在用户本地 `docs/BUILD.md`（不上传 Git）

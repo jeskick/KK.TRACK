@@ -32,6 +32,7 @@ static kk_rx_web_gesture_sync_cb_t s_gesture_sync;
 static kk_rx_web_track_sync_cb_t s_track_sync;
 static kk_rx_web_saved_cb_t s_on_saved;
 static kk_rx_web_ota_prepare_cb_t s_ota_prepare;
+static kk_rx_web_live_status_cb_t s_live_status;
 static volatile bool s_ota_http_slot;
 
 void kk_rx_web_touch(void)
@@ -87,22 +88,27 @@ static esp_err_t favicon_get(httpd_req_t *req)
 static esp_err_t status_get(httpd_req_t *req)
 {
     kk_rx_web_touch();
-    char buf[400];
+    char buf[480];
     uint8_t clr = s_profile ? s_profile->ch_lr : 6;
     uint8_t cud = s_profile ? s_profile->ch_ud : 7;
     uint8_t trk_str = s_profile ? s_profile->track_decouple_str_x100 : KK_TRACK_DEC_STR_DEFAULT;
     uint8_t trk_dom = s_profile ? s_profile->track_decouple_dom_x10 : KK_TRACK_DEC_DOM_DEFAULT;
     uint8_t trk_dec = s_profile && s_profile->track_decouple_en ? 1U : 0U;
     uint8_t trk_mob = s_profile && s_profile->track_motion_en ? 1U : 0U;
+    kk_rx_web_live_status_t live = {0};
+    if (s_live_status) {
+        s_live_status(&live);
+    }
     snprintf(buf, sizeof(buf),
              "{\"ppm_lr\":%u,\"ppm_ud\":%u,\"ch_lr\":%u,\"ch_ud\":%u,\"yaw\":%.2f,\"pitch\":%.2f,"
              "\"track_decouple_en\":%u,\"track_motion_en\":%u,"
              "\"track_decouple_str_x100\":%u,\"track_decouple_dom_x10\":%u,"
-             "\"rx_ver\":\"%s\",\"tx_ver\":\"%s\",\"rc_proto\":%u,\"ota_max\":%u,\"ota_ready\":%u}",
+             "\"rx_ver\":\"%s\",\"tx_ver\":\"%s\",\"rc_proto\":%u,\"ble\":%u,\"failsafe\":%u,"
+             "\"motion_paused\":%u,\"ota_max\":%u,\"ota_ready\":%u}",
              g_kk_ht.ppm_lr, g_kk_ht.ppm_ud, clr, cud, g_kk_ht.yaw_f, g_kk_ht.pitch_f, trk_dec,
              trk_mob, trk_str, trk_dom, kk_fw_local_version(), kk_fw_tx_version(),
-             s_profile ? s_profile->rc_proto : 0U,
-             (unsigned)kk_rx_ota_max_image_bytes(),
+             s_profile ? s_profile->rc_proto : 0U, live.ble ? 1U : 0U, live.failsafe ? 1U : 0U,
+             live.motion_paused ? 1U : 0U, (unsigned)kk_rx_ota_max_image_bytes(),
              kk_rx_ota_max_image_bytes() > 0U ? 1U : 0U);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
@@ -155,6 +161,13 @@ static esp_err_t ota_stream_run(httpd_req_t *req, bool target_tx, char *out, siz
     }
 
     esp_err_t err = target_tx ? kk_rx_ota_tx_begin(total) : kk_rx_ota_local_begin(total);
+    if (target_tx && err == ESP_ERR_NOT_FINISHED) {
+        while (err == ESP_ERR_NOT_FINISHED) {
+            kk_rx_web_touch();
+            vTaskDelay(pdMS_TO_TICKS(20));
+            err = kk_rx_ota_tx_begin_poll();
+        }
+    }
     if (err != ESP_OK) {
         const kk_ota_status_t *st = kk_rx_ota_status();
         snprintf(out, out_cap, "{\"ok\":false,\"err\":\"begin\",\"code\":%d,\"msg\":\"%s\"}",
@@ -278,21 +291,50 @@ static esp_err_t config_get(httpd_req_t *req)
     return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
 }
 
-static int kk_web_arg_int(const char *body, const char *key, int def)
+static const char *kk_web_find_value(const char *body, size_t body_len, const char *key, size_t *val_len)
 {
-    char search[32];
-    snprintf(search, sizeof(search), "%s=", key);
-    const char *p = strstr(body, search);
-    if (!p) {
-        return def;
+    if (!body || !key || !val_len || body_len == 0) {
+        return NULL;
     }
-    p += strlen(search);
-    return atoi(p);
+    const size_t key_len = strlen(key);
+    const char *p = body;
+    const char *end = body + body_len;
+
+    while (p < end) {
+        if ((size_t)(end - p) >= key_len + 1U && strncmp(p, key, key_len) == 0 && p[key_len] == '=') {
+            p += key_len + 1;
+            const char *amp = memchr(p, '&', (size_t)(end - p));
+            *val_len = amp ? (size_t)(amp - p) : (size_t)(end - p);
+            return p;
+        }
+        const char *amp = memchr(p, '&', (size_t)(end - p));
+        if (!amp) {
+            break;
+        }
+        p = amp + 1;
+    }
+    return NULL;
 }
 
-static bool kk_web_read_body(httpd_req_t *req, char *body, size_t cap)
+static int kk_web_arg_int(const char *body, size_t body_len, const char *key, int def)
 {
-    if (!body || cap < 8) {
+    size_t vlen = 0;
+    const char *v = kk_web_find_value(body, body_len, key, &vlen);
+    if (!v || vlen == 0) {
+        return def;
+    }
+    char tmp[16];
+    if (vlen >= sizeof(tmp)) {
+        return def;
+    }
+    memcpy(tmp, v, vlen);
+    tmp[vlen] = '\0';
+    return atoi(tmp);
+}
+
+static bool kk_web_read_body(httpd_req_t *req, char *body, size_t cap, size_t *out_len)
+{
+    if (!body || cap < 8 || !out_len) {
         return false;
     }
 
@@ -300,8 +342,12 @@ static bool kk_web_read_body(httpd_req_t *req, char *body, size_t cap)
     const size_t want = req->content_len;
 
     if (want > 0) {
-        while (got < want && got < cap - 1) {
-            const int n = httpd_req_recv(req, body + got, (cap - 1) - got);
+        if (want >= cap) {
+            ESP_LOGW(TAG, "[WEB] body too large want=%u cap=%u", (unsigned)want, (unsigned)cap);
+            return false;
+        }
+        while (got < want) {
+            const int n = httpd_req_recv(req, body + got, want - got);
             if (n <= 0) {
                 ESP_LOGW(TAG, "[WEB] recv err want=%u got=%u", (unsigned)want, (unsigned)got);
                 return false;
@@ -317,6 +363,7 @@ static bool kk_web_read_body(httpd_req_t *req, char *body, size_t cap)
     }
 
     body[got] = '\0';
+    *out_len = got;
     return got > 0;
 }
 
@@ -327,7 +374,8 @@ static esp_err_t save_post(httpd_req_t *req)
         return httpd_resp_send(req, "{\"ok\":false,\"err\":\"ota\"}", HTTPD_RESP_USE_STRLEN);
     }
     char body[512];
-    if (!kk_web_read_body(req, body, sizeof(body))) {
+    size_t body_len = 0;
+    if (!kk_web_read_body(req, body, sizeof(body), &body_len)) {
         ESP_LOGW(TAG, "[WEB] save recv fail len=%d", (int)req->content_len);
         return httpd_resp_send(req, "{\"ok\":false}", HTTPD_RESP_USE_STRLEN);
     }
@@ -339,29 +387,31 @@ static esp_err_t save_post(httpd_req_t *req)
     kk_rx_profile_t p = *s_profile;
     const uint8_t old_proto = p.rc_proto;
     p.rc_proto = (uint8_t)kk_rc_out_sanitize_proto(
-        (uint8_t)kk_web_arg_int(body, "rc_proto", (int)p.rc_proto));
-    p.ch_lr = (uint8_t)kk_web_arg_int(body, "ch_lr", p.ch_lr);
-    p.ch_ud = (uint8_t)kk_web_arg_int(body, "ch_ud", p.ch_ud);
-    p.offset_lr = (int16_t)kk_web_arg_int(body, "offset_lr", p.offset_lr);
-    p.offset_ud = (int16_t)kk_web_arg_int(body, "offset_ud", p.offset_ud);
-    p.scale_lr = (uint8_t)kk_web_arg_int(body, "scale_lr", p.scale_lr);
-    p.scale_ud = (uint8_t)kk_web_arg_int(body, "scale_ud", p.scale_ud);
+        (uint8_t)kk_web_arg_int(body, body_len, "rc_proto", (int)p.rc_proto));
+    p.ch_lr = (uint8_t)kk_web_arg_int(body, body_len, "ch_lr", p.ch_lr);
+    p.ch_ud = (uint8_t)kk_web_arg_int(body, body_len, "ch_ud", p.ch_ud);
+    p.offset_lr = (int16_t)kk_web_arg_int(body, body_len, "offset_lr", p.offset_lr);
+    p.offset_ud = (int16_t)kk_web_arg_int(body, body_len, "offset_ud", p.offset_ud);
+    p.scale_lr = (uint8_t)kk_web_arg_int(body, body_len, "scale_lr", p.scale_lr);
+    p.scale_ud = (uint8_t)kk_web_arg_int(body, body_len, "scale_ud", p.scale_ud);
     p.yaw_servo_deg = (uint16_t)kk_rx_sanitize_yaw_servo_deg(
-        (uint16_t)kk_web_arg_int(body, "yaw_servo_deg", (int)p.yaw_servo_deg));
-    p.rev_lr = kk_web_arg_int(body, "rev_lr", 0) != 0;
-    p.rev_ud = kk_web_arg_int(body, "rev_ud", 0) != 0;
-    p.mount_horiz = kk_imu_mount_deg_to_steps((uint16_t)kk_web_arg_int(body, "mount_horiz", 0));
-    p.mount_lr = kk_imu_mount_deg_to_steps((uint16_t)kk_web_arg_int(body, "mount_lr", 0));
-    p.mount_fb = kk_imu_mount_deg_to_steps((uint16_t)kk_web_arg_int(body, "mount_fb", 0));
-    p.gest_roll_deg = (uint8_t)kk_web_arg_int(body, "gest_roll_deg", (int)p.gest_roll_deg);
-    p.gest_swing_ms = (uint16_t)kk_web_arg_int(body, "gest_swing_ms", (int)p.gest_swing_ms);
+        (uint16_t)kk_web_arg_int(body, body_len, "yaw_servo_deg", (int)p.yaw_servo_deg));
+    p.rev_lr = kk_web_arg_int(body, body_len, "rev_lr", 0) != 0;
+    p.rev_ud = kk_web_arg_int(body, body_len, "rev_ud", 0) != 0;
+    p.mount_horiz = kk_imu_mount_deg_to_steps((uint16_t)kk_web_arg_int(body, body_len, "mount_horiz", 0));
+    p.mount_lr = kk_imu_mount_deg_to_steps((uint16_t)kk_web_arg_int(body, body_len, "mount_lr", 0));
+    p.mount_fb = kk_imu_mount_deg_to_steps((uint16_t)kk_web_arg_int(body, body_len, "mount_fb", 0));
+    p.gest_roll_deg = (uint8_t)kk_web_arg_int(body, body_len, "gest_roll_deg", (int)p.gest_roll_deg);
+    p.gest_swing_ms = (uint16_t)kk_web_arg_int(body, body_len, "gest_swing_ms", (int)p.gest_swing_ms);
     p.gest_center_en = true;
-    p.track_decouple_en = kk_web_arg_int(body, "track_decouple_en", p.track_decouple_en ? 1 : 0) != 0;
-    p.track_motion_en = kk_web_arg_int(body, "track_motion_en", p.track_motion_en ? 1 : 0) != 0;
-    p.track_decouple_str_x100 =
-        (uint8_t)kk_web_arg_int(body, "track_decouple_str_x100", (int)p.track_decouple_str_x100);
-    p.track_decouple_dom_x10 =
-        (uint8_t)kk_web_arg_int(body, "track_decouple_dom_x10", (int)p.track_decouple_dom_x10);
+    p.track_decouple_en =
+        kk_web_arg_int(body, body_len, "track_decouple_en", p.track_decouple_en ? 1 : 0) != 0;
+    p.track_motion_en =
+        kk_web_arg_int(body, body_len, "track_motion_en", p.track_motion_en ? 1 : 0) != 0;
+    p.track_decouple_str_x100 = (uint8_t)kk_web_arg_int(body, body_len, "track_decouple_str_x100",
+                                                        (int)p.track_decouple_str_x100);
+    p.track_decouple_dom_x10 = (uint8_t)kk_web_arg_int(body, body_len, "track_decouple_dom_x10",
+                                                       (int)p.track_decouple_dom_x10);
     kk_rx_profile_sanitize(&p);
     *s_profile = p;
     kk_rx_profile_save(s_profile);
@@ -503,6 +553,11 @@ void kk_rx_web_set_on_saved(kk_rx_web_saved_cb_t cb)
 void kk_rx_web_set_ota_prepare(kk_rx_web_ota_prepare_cb_t cb)
 {
     s_ota_prepare = cb;
+}
+
+void kk_rx_web_set_live_status_cb(kk_rx_web_live_status_cb_t cb)
+{
+    s_live_status = cb;
 }
 
 void kk_rx_web_handle(void)

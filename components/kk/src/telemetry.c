@@ -1,5 +1,4 @@
 #include "kk/telemetry.h"
-#include "kk/board_rx.h"
 #include "kk/time.h"
 
 #include <stdio.h>
@@ -14,7 +13,7 @@ void kk_tel_reset(void)
     memset(&g_kk_tel, 0, sizeof(g_kk_tel));
 }
 
-int kk_tel_format_pose(char *buf, size_t cap, float yaw_deg, float pitch_deg)
+int kk_tel_format_pose(char *buf, size_t cap, float yaw_deg, float pitch_deg, bool motion_paused)
 {
     if (!buf || cap < 16) {
         return 0;
@@ -22,7 +21,8 @@ int kk_tel_format_pose(char *buf, size_t cap, float yaw_deg, float pitch_deg)
     if (!isfinite(yaw_deg) || !isfinite(pitch_deg)) {
         return 0;
     }
-    const int n = snprintf(buf, cap, "yaw:%.1f,pitch:%.1f", yaw_deg, pitch_deg);
+    const int n = snprintf(buf, cap, "yaw:%.1f,pitch:%.1f,mob:%u", yaw_deg, pitch_deg,
+                             motion_paused ? 1U : 0U);
     if (n <= 0 || (size_t)n >= cap) {
         return 0;
     }
@@ -46,17 +46,37 @@ static bool kk_tel_parse_key_float(const char *s, const char *key, float *out)
     return isfinite(*out);
 }
 
+static bool kk_tel_parse_key_uint(const char *s, const char *key, unsigned *out)
+{
+    if (!s || !key || !out) {
+        return false;
+    }
+    const char *p = strstr(s, key);
+    if (!p) {
+        return false;
+    }
+    p += strlen(key);
+    if (*p != ':') {
+        return false;
+    }
+    *out = (unsigned)strtoul(p + 1, NULL, 10);
+    return true;
+}
+
 void kk_tel_on_udp_payload(const char *buf)
 {
     if (!buf) {
         return;
     }
+    bool pose_ok = false;
     float v = 0.0f;
     if (kk_tel_parse_key_float(buf, "yaw", &v)) {
         g_kk_tel.yaw_deg = v;
+        pose_ok = true;
     }
     if (kk_tel_parse_key_float(buf, "pitch", &v)) {
         g_kk_tel.pitch_deg = v;
+        pose_ok = true;
     }
     if (kk_tel_parse_key_float(buf, "txv", &v)) {
         g_kk_tel.tx_voltage = v;
@@ -67,16 +87,18 @@ void kk_tel_on_udp_payload(const char *buf)
         g_kk_tel.rx_voltage = v;
         g_kk_tel.rx_v_valid = true;
     }
-    g_kk_tel.last_pkt_ms = kk_millis();
+    unsigned mob = 0;
+    if (kk_tel_parse_key_uint(buf, "mob", &mob)) {
+        g_kk_tel.motion_paused = mob != 0;
+    }
+    if (pose_ok) {
+        g_kk_tel.last_pkt_ms = kk_millis();
+    }
 }
 
 void kk_tel_poll_rx_voltage(void)
 {
-#if PIN_VBAT_ADC >= 0
     (void)0;
-#else
-    (void)0;
-#endif
 }
 
 void kk_tel_poll_link(void)

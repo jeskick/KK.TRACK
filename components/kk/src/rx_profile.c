@@ -1,5 +1,4 @@
 #include "kk/rx_profile.h"
-#include "kk/rc_out.h"
 #include "kk/imu_mount.h"
 #include "kk/link_config.h"
 #include "kk/tx_track_cfg.h"
@@ -119,7 +118,7 @@ void kk_rx_profile_sanitize(kk_rx_profile_t *p)
     if (!p) {
         return;
     }
-    p->rc_proto = kk_rc_out_sanitize_proto(p->rc_proto);
+    p->rc_proto = kk_rc_proto_sanitize(p->rc_proto);
     p->ch_lr = kk_rx_clamp_ch(p->ch_lr);
     p->ch_ud = kk_rx_clamp_ch(p->ch_ud);
     if (p->ch_lr == p->ch_ud) {

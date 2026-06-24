@@ -675,13 +675,18 @@ esp_err_t kk_ble_rx_ota_tx_begin(size_t size)
     s_ota_begin_err = ESP_ERR_TIMEOUT;
     s_ota_begin_deadline = kk_millis() + KK_OTA_TX_RDY_MS;
     s_ota_begin_active = true;
-    while (s_ota_begin_active) {
-        kk_rx_web_touch();
-        if (xSemaphoreTake(s_ota_begin_done, pdMS_TO_TICKS(200)) == pdTRUE) {
-            return s_ota_begin_err;
-        }
+    return ESP_ERR_NOT_FINISHED;
+}
+
+esp_err_t kk_ble_rx_ota_tx_begin_poll(void)
+{
+    if (!s_ota_begin_active) {
+        return s_ota_begin_err;
     }
-    return s_ota_begin_err;
+    if (xSemaphoreTake(s_ota_begin_done, pdMS_TO_TICKS(50)) == pdTRUE) {
+        return s_ota_begin_err;
+    }
+    return ESP_ERR_NOT_FINISHED;
 }
 
 static size_t kk_ble_ota_chunk_cap(void)

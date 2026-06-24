@@ -202,6 +202,11 @@ static esp_err_t ota_ble_tx_begin(size_t size)
     return kk_ble_rx_ota_tx_begin(size);
 }
 
+static esp_err_t ota_ble_tx_begin_poll(void)
+{
+    return kk_ble_rx_ota_tx_begin_poll();
+}
+
 static esp_err_t ota_ble_tx_write(const uint8_t *data, size_t len)
 {
     return kk_ble_rx_ota_tx_send(data, len);
@@ -226,10 +231,21 @@ static bool ota_ble_tx_ready(void)
 static const kk_rx_ota_tx_ops_t s_ota_tx_ops = {
     .ready = ota_ble_tx_ready,
     .begin = ota_ble_tx_begin,
+    .begin_poll = ota_ble_tx_begin_poll,
     .write = ota_ble_tx_write,
     .finish = ota_ble_tx_finish,
     .abort = ota_ble_tx_abort,
 };
+
+static void web_live_status(kk_rx_web_live_status_t *st)
+{
+    if (!st) {
+        return;
+    }
+    st->ble = kk_ble_rx_is_connected();
+    st->failsafe = kk_head_track_failsafe_active();
+    st->motion_paused = g_kk_tel.motion_paused;
+}
 
 static void on_ble_connect(void)
 {
@@ -428,6 +444,7 @@ void app_main(void)
 
         if (s_web_pending && kk_wifi_rx_ap_ready() && !s_web_on) {
             kk_rx_web_begin(&g_profile);
+            kk_rx_web_set_live_status_cb(web_live_status);
             s_web_on = true;
             s_web_pending = false;
             ESP_LOGW(TAG, "web server on");

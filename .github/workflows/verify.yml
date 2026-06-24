@@ -1,0 +1,18 @@
+name: verify
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify-kk-copies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify kk component copies
+        run: python components/kk/tools/verify_kk_copies.py
+      - name: Host unit tests (ota/rc/profile)
+        run: python components/kk/test/run_host_tests.py
